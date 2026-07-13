@@ -48,9 +48,9 @@ object SettingsManager {
         getPrefs(context).edit().putString(KEY_VISUALIZER_RESPONSE, value).apply()
 
     fun getVisualizerFps(context: Context): Int =
-        getPrefs(context).getInt(KEY_VISUALIZER_FPS, 42).coerceIn(15, 45)
+        getPrefs(context).getInt(KEY_VISUALIZER_FPS, 42).coerceIn(15, 120)
     fun setVisualizerFps(context: Context, value: Int) =
-        getPrefs(context).edit().putInt(KEY_VISUALIZER_FPS, value.coerceIn(15, 45)).apply()
+        getPrefs(context).edit().putInt(KEY_VISUALIZER_FPS, value.coerceIn(15, 120)).apply()
 
     fun openPlayerOnSelection(context: Context): Boolean =
         getPrefs(context).getBoolean(KEY_OPEN_PLAYER_ON_SELECTION, false)

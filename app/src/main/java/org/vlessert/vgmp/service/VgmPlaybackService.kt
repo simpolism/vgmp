@@ -51,7 +51,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val NOTIF_CHANNEL_ID = "vgmp_playback"
         const val NOTIF_ID = 1
         const val SAMPLE_RATE = 44100
-        const val BUFFER_FRAMES = 1024
+        // Small render chunks provide fresh analyzer data quickly enough for 120 Hz displays.
+        // AudioTrack still uses its device-sized internal buffer, so playback is not limited to
+        // this individual write size.
+        const val BUFFER_FRAMES = 256
         const val ACTION_PLAY   = "org.vlessert.vgmp.ACTION_PLAY"
         const val ACTION_PAUSE  = "org.vlessert.vgmp.ACTION_PAUSE"
         const val ACTION_NEXT   = "org.vlessert.vgmp.ACTION_NEXT"
@@ -96,7 +99,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _channelSpectrums = MutableStateFlow<FloatArray?>(null)
     val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
     
-    private var lastSpectrumUpdateMs = 0L
+    private var lastSpectrumUpdateNs = 0L
 
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
@@ -509,10 +512,17 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
 
                         // Update spectrum for UI
-                        val nowSpectrum = SystemClock.elapsedRealtime()
-                        val spectrumIntervalMs = 1000L / SettingsManager.getVisualizerFps(applicationContext)
-                        if (nowSpectrum - lastSpectrumUpdateMs >= spectrumIntervalMs) {
-                            lastSpectrumUpdateMs = nowSpectrum
+                        val nowSpectrum = SystemClock.elapsedRealtimeNanos()
+                        val spectrumIntervalNs = 1_000_000_000L /
+                            SettingsManager.getVisualizerFps(applicationContext)
+                        if (nowSpectrum - lastSpectrumUpdateNs >= spectrumIntervalNs) {
+                            // Advance the deadline rather than resetting it to `now`. Render chunks
+                            // do not divide evenly into every display rate; preserving the remainder
+                            // avoids turning a requested 120 FPS into ~86 FPS.
+                            lastSpectrumUpdateNs = if (
+                                lastSpectrumUpdateNs == 0L ||
+                                nowSpectrum - lastSpectrumUpdateNs > spectrumIntervalNs * 2
+                            ) nowSpectrum else lastSpectrumUpdateNs + spectrumIntervalNs
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
                             // Channel levels for KSS

@@ -96,7 +96,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
     
     private var lastSpectrumUpdateMs = 0L
-    private val SPECTRUM_UPDATE_INTERVAL_MS = 33L // ~30 fps for smoother UI
+    private val SPECTRUM_UPDATE_INTERVAL_MS = 24L // Audio arrives in ~23 ms buffers (~42 fps)
 
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo

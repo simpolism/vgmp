@@ -684,7 +684,7 @@ class NowPlayingFragment : Fragment() {
         binding.btnPlayPause.setImageResource(
             if (playing) R.drawable.ic_pause else R.drawable.ic_play
         )
-        binding.btnVisualizer.isEnabled = playing
+        binding.btnVisualizer.isEnabled = service?.currentTrack != null
     }
 
     private fun startPositionUpdater() {

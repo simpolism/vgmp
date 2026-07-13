@@ -9,7 +9,9 @@ import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.View
 import kotlin.math.max
-import kotlin.math.min
+import kotlin.math.ln
+import kotlin.math.exp
+import kotlin.math.sqrt
 
 class SpectrumBarsView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
@@ -29,8 +31,9 @@ class SpectrumBarsView @JvmOverloads constructor(
     private var peaks: FloatArray? = null
     private var lastDrawMs = 0L
 
-    private val binCount = 48
-    private val barGap = 6f
+    private val bandCount = 24
+    private val barCount = bandCount * 2
+    private val barGap = 5f
     private val corner = 10f
 
     private var barRect = RectF()
@@ -67,29 +70,31 @@ class SpectrumBarsView @JvmOverloads constructor(
         lastDrawMs = now
 
         val n = magnitudes.size
-        val binned = FloatArray(binCount)
+        val binned = FloatArray(bandCount)
 
-        // Log-ish binning by segmenting FFT into increasing ranges
-        for (i in 0 until binCount) {
-            val start = ((i * i).toFloat() / (binCount * binCount) * n).toInt().coerceIn(0, n - 1)
-            val end = (((i + 1) * (i + 1)).toFloat() / (binCount * binCount) * n)
-                .toInt().coerceIn(start + 1, n)
-            var maxMag = 0f
+        // True logarithmic bands avoid repeating the first few FFT bins. RMS pooling
+        // keeps a single narrow peak from dominating an entire visual band.
+        val logMax = ln(n.toFloat())
+        for (i in 0 until bandCount) {
+            val start = exp(logMax * i / bandCount).toInt().coerceIn(1, n - 1)
+            val end = exp(logMax * (i + 1) / bandCount).toInt().coerceIn(start + 1, n)
+            var sumSquares = 0f
             for (j in start until end) {
                 val v = magnitudes[j]
-                if (v > maxMag) maxMag = v
+                sumSquares += v * v
             }
-            binned[i] = maxMag
+            val rms = sqrt(sumSquares / (end - start))
+            binned[i] = SpectrumScale.level(rms, i.toFloat() / (bandCount - 1))
         }
 
-        if (smoothed == null || smoothed!!.size != binCount) {
+        if (smoothed == null || smoothed!!.size != bandCount) {
             smoothed = binned.copyOf()
             peaks = binned.copyOf()
         } else {
-            val attack = 0.55f
-            val release = 0.12f
-            val peakFall = 0.6f * (dt / 16f)
-            for (i in 0 until binCount) {
+            val attack = 0.75f
+            val release = 0.3f
+            val peakFall = 0.025f * (dt / 16f)
+            for (i in 0 until bandCount) {
                 val target = binned[i]
                 val current = smoothed!![i]
                 smoothed!![i] = if (target > current) {
@@ -103,21 +108,25 @@ class SpectrumBarsView @JvmOverloads constructor(
 
         val width = width.toFloat()
         val height = height.toFloat()
-        val barWidth = (width - barGap * (binCount + 1)) / binCount
+        val topInset = 24f
+        val bottomInset = 12f
+        val baseline = height - bottomInset
+        val drawableHeight = (baseline - topInset).coerceAtLeast(1f)
+        val barWidth = (width - barGap * (barCount + 1)) / barCount
 
-        for (i in 0 until binCount) {
-            val magnitude = smoothed!![i]
-            val normalized = (magnitude / 96f).coerceIn(0f, 1f)
-            val barHeight = max(4f, normalized * height)
+        for (i in 0 until barCount) {
+            val band = if (i < bandCount) bandCount - 1 - i else i - bandCount
+            val normalized = smoothed!![band]
+            val barHeight = max(4f, normalized * drawableHeight)
             val left = barGap + i * (barWidth + barGap)
-            val top = height - barHeight
+            val top = baseline - barHeight
 
-            barRect.set(left, top, left + barWidth, height)
+            barRect.set(left, top, left + barWidth, baseline)
             canvas.drawRoundRect(barRect, corner, corner, barPaint)
 
             // Peak cap
-            val peakHeight = min(height, height - (peaks!![i] / 96f).coerceIn(0f, 1f) * height)
-            barRect.set(left, peakHeight - 6f, left + barWidth, peakHeight)
+            val peakY = baseline - peaks!![band] * drawableHeight
+            barRect.set(left, peakY - 5f, left + barWidth, peakY)
             canvas.drawRoundRect(barRect, 4f, 4f, peakPaint)
         }
     }

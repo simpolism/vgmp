@@ -197,7 +197,7 @@ class MainActivity : AppCompatActivity() {
     
     fun showAnalyzer() {
         // Fullscreen visualizers are opened explicitly from the player.
-        if (playbackService?.playing != true) return
+        if (playbackService?.currentTrack == null) return
         
         isAnalyzerVisible = true
         

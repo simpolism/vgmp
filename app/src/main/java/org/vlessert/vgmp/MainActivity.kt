@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
         // Setup auto-hide for main screen
         setupMainAutoHide()
 
-        // Handle back button for library minimization
+        // Navigate up within the selected tree before backgrounding the app.
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
                 val browser = supportFragmentManager.findFragmentByTag("tab_browse") as? BrowserFragment
@@ -393,32 +393,17 @@ class MainActivity : AppCompatActivity() {
     fun updateMiniPlayer() {
         val svc = playbackService ?: return
         val track = svc.currentTrack
-        val game = svc.currentGame
         binding.miniPlayer.tvMiniTitle.text = track?.title ?: getString(R.string.no_track_playing)
-        binding.miniPlayer.tvMiniGame.text = game?.name ?: ""
+        binding.miniPlayer.tvMiniGame.text = svc.getCurrentTags().displayGame
         val isPlaying = svc.playing
         binding.miniPlayer.btnMiniPlayPause.setImageResource(
             if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play
         )
-        if (game?.artPath?.isNotEmpty() == true) {
-            try {
-                val bm = android.graphics.BitmapFactory.decodeFile(game.artPath)
-                binding.miniPlayer.ivMiniArt.setImageBitmap(bm)
-            } catch (e: Exception) {
-                binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
-            }
-        } else {
-            binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
-        }
+        binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
     }
 
     fun getService() = playbackService
     
-    fun refreshLibrary() {
-        // Refresh playback service's game list
-        playbackService?.refreshGames()
-    }
-
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true

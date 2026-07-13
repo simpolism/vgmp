@@ -35,9 +35,9 @@ import org.vlessert.vgmp.R
 import org.vlessert.vgmp.VgmServiceBinder
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.engine.VgmTags
-import org.vlessert.vgmp.library.Game
-import org.vlessert.vgmp.library.GameLibrary
-import org.vlessert.vgmp.library.TrackEntity
+import org.vlessert.vgmp.playback.PlaybackQueue
+import org.vlessert.vgmp.playback.TrackRef
+import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
 import java.io.IOException
@@ -68,20 +68,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         )
     }
 
-    enum class ShuffleMode { OFF, GAME, ALL }
-    enum class LoopMode { OFF, TRACK, GAME }
+    enum class ShuffleMode { OFF, ON }
+    enum class LoopMode { OFF, TRACK, QUEUE }
 
     private lateinit var mediaSession: MediaSessionCompat
     private var audioTrack: AudioTrack? = null
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // Playback state
-    private var allGames: List<Game> = emptyList()
-    private var currentGameIdx: Int = -1
-    private var currentTrackIdx: Int = -1
-    private var documentGame: Game? = null
-    private var documentQueue: List<DocumentTrack> = emptyList()
-    private var documentQueueIndex = -1
+    private val queue = PlaybackQueue<TrackRef>()
+    private var currentLocalPath: String? = null
     private var isPlaying = false
     private var isPaused  = false
     private var shouldPlayAfterFocusGain = false
@@ -116,21 +111,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _playbackState = MutableStateFlow<PlaybackInfo>(PlaybackInfo())
     val playbackInfo = _playbackState.asStateFlow()
 
-    // Library ready state - emits after the service has loaded local library state
-    private val _libraryReady = MutableStateFlow(false)
-    val libraryReady: StateFlow<Boolean> = _libraryReady.asStateFlow()
-
     data class PlaybackInfo(
         val playing: Boolean = false,
         val paused: Boolean = false,
-        val gameIdx: Int = -1,
-        val trackIdx: Int = -1,
-        val track: TrackEntity? = null,
+        val queueIndex: Int = -1,
+        val track: TrackRef? = null,
         val durationMs: Long = 0L,
         val endlessLoop: Boolean = false
     )
-
-    data class DocumentTrack(val uri: Uri, val displayName: String)
 
     // Position tracking
     private var playbackStartTimeMs = 0L
@@ -149,14 +137,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         VgmEngine.nSetSampleRate(SAMPLE_RATE)
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
-        // Initialize the engine and load local library state. Network access is never used.
+        // Initialize the engine and the two ROM resources used by supported formats.
         serviceScope.launch {
             VgmEngine.setSampleRate(SAMPLE_RATE) // Use thread-safe version
             extractRoms()
             VgmEngine.setBassEnabled(SettingsManager.isBassEnabled(applicationContext))
             VgmEngine.setReverbEnabled(SettingsManager.isReverbEnabled(applicationContext))
-            allGames = GameLibrary.getAllGames()
-            _libraryReady.value = true
         }
     }
 
@@ -221,25 +207,23 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         override fun onSeekTo(pos: Long) { seekTo(pos) }
         override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
             mediaId ?: return
-            // Format: "gameIdx/trackIdx"
             val parts = mediaId.split("/")
-            if (parts.size == 2) {
-                val gi = parts[0].toIntOrNull() ?: return
-                val ti = parts[1].toIntOrNull() ?: return
-                serviceScope.launch { loadAndPlay(gi, ti) }
-            }
+            if (parts.size != 3 || parts[0] != "track") return
+            val playlist = PlaylistStore.getAll(applicationContext).firstOrNull { it.id == parts[1] } ?: return
+            val index = parts[2].toIntOrNull() ?: return
+            playQueue(playlist.tracks.map { TrackRef(it.uri, it.displayName) }, index)
         }
         override fun onSetRepeatMode(repeatMode: Int) {
             loopMode = when (repeatMode) {
                 PlaybackStateCompat.REPEAT_MODE_ONE -> LoopMode.TRACK
-                PlaybackStateCompat.REPEAT_MODE_ALL -> LoopMode.GAME
+                PlaybackStateCompat.REPEAT_MODE_ALL -> LoopMode.QUEUE
                 else -> LoopMode.OFF
             }
         }
         override fun onSetShuffleMode(shuffleMode: Int) {
             this@VgmPlaybackService.shuffleMode = when(shuffleMode) {
-                PlaybackStateCompat.SHUFFLE_MODE_ALL -> ShuffleMode.ALL
-                PlaybackStateCompat.SHUFFLE_MODE_GROUP -> ShuffleMode.GAME
+                PlaybackStateCompat.SHUFFLE_MODE_ALL,
+                PlaybackStateCompat.SHUFFLE_MODE_GROUP -> ShuffleMode.ON
                 else -> ShuffleMode.OFF
             }
         }
@@ -249,7 +233,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     
     private lateinit var audioManager: AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
-    private var pendingPlayback: Pair<Game, TrackEntity>? = null // game, track for delayed playback
+    private var pendingPlayback: Pair<TrackRef, String>? = null
     private var hasAudioFocus = false
 
     private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
@@ -259,9 +243,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 audioTrack?.setVolume(1.0f)
                 if (shouldPlayAfterFocusGain) resumeOrPlay()
                 // Handle delayed focus gain for pending playback
-                pendingPlayback?.let { (game, track) ->
+                pendingPlayback?.let { (track, path) ->
                     pendingPlayback = null
-                    serviceScope.launch { startTrackWithFocus(game, track) }
+                    serviceScope.launch { startTrackWithFocus(track, path) }
                 }
             }
             AudioManager.AUDIOFOCUS_LOSS -> {
@@ -345,18 +329,46 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     // ------- Playback control -------
 
-    suspend fun loadAndPlay(gameIdx: Int, trackIdx: Int) {
-        if (gameIdx < 0 || gameIdx >= allGames.size) return
-        val game = allGames[gameIdx]
-        if (trackIdx < 0 || trackIdx >= game.tracks.size) return
-        val track = game.tracks[trackIdx]
-        documentGame = null
-        currentGameIdx  = gameIdx
-        currentTrackIdx = trackIdx
-        startTrack(game, track)
+    fun playQueue(tracks: List<TrackRef>, startIndex: Int = 0) {
+        val playable = tracks.filter { isSupportedDocument(it.displayName) }
+        queue.replace(playable, startIndex)
+        if (queue.current == null) return
+        serviceScope.launch { startCurrentTrack() }
     }
 
-    private suspend fun startTrack(game: Game, track: TrackEntity) {
+    fun playDocument(uri: Uri, displayName: String) = playQueue(listOf(TrackRef(uri, displayName)))
+
+    private suspend fun startCurrentTrack() {
+        val track = queue.current ?: return
+        val path = materialize(track) ?: return
+        currentLocalPath = path
+        startTrack(track, path)
+    }
+
+    private suspend fun materialize(track: TrackRef): String? {
+        val extension = track.displayName.substringAfterLast('.', "").lowercase()
+        if (extension !in DIRECT_PLAY_EXTENSIONS) return null
+        val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
+        val safeName = track.displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+            .takeLast(180).ifEmpty { "track.$extension" }
+        val destination = File(directPlayDir, "current-$safeName")
+        return try {
+            withContext(Dispatchers.IO) {
+                directPlayDir.listFiles()?.filter { it != destination }?.forEach { it.delete() }
+                contentResolver.openInputStream(track.uri)?.use { input ->
+                    destination.outputStream().use { output -> input.copyTo(output) }
+                } ?: throw IOException("Could not open the selected document")
+            }
+            destination.absolutePath
+        } catch (e: Exception) {
+            destination.delete()
+            Log.e(TAG, "Failed to copy ${track.displayName}", e)
+            Toast.makeText(applicationContext, "Could not open ${track.displayName}", Toast.LENGTH_LONG).show()
+            null
+        }
+    }
+
+    private suspend fun startTrack(track: TrackRef, path: String) {
         stopRenderJob()
         
         // Request audio focus - handle delayed focus for Android Auto
@@ -375,7 +387,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 return
             }
             if (result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED) {
-                pendingPlayback = Pair(game, track)
+                pendingPlayback = track to path
                 return
             }
             hasAudioFocus = true
@@ -393,26 +405,26 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             hasAudioFocus = true
         }
         
-        startTrackWithFocus(game, track)
+        startTrackWithFocus(track, path)
     }
 
-    private suspend fun startTrackWithFocus(game: Game, track: TrackEntity) {
-        val opened = VgmEngine.open(track.filePath)
+    private suspend fun startTrackWithFocus(track: TrackRef, path: String) {
+        val opened = VgmEngine.open(path)
         if (!opened) {
-            Log.e(TAG, "Failed to open ${track.filePath}")
+            Log.e(TAG, "Failed to open $path")
             isPlaying = false
             isPaused = false
             updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
             _playbackState.value = PlaybackInfo()
             abandonAudioFocus()
             withContext(Dispatchers.Main) {
-                Toast.makeText(applicationContext, "Unable to play ${track.title}", Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, "Unable to play ${track.displayName}", Toast.LENGTH_LONG).show()
             }
             return
         }
         
         // Show toast for PSF files since they require background generation
-        val lowerPath = track.filePath.lowercase()
+        val lowerPath = path.lowercase()
         if (lowerPath.endsWith(".psf") || lowerPath.endsWith(".psf1")) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(applicationContext, "Generating audio, please wait...", Toast.LENGTH_LONG).show()
@@ -420,10 +432,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
         
         // For multi-track files (NSF, GBS, etc.), switch to the correct sub-track
-        if (track.subTrackIndex >= 0) {
-            val switched = VgmEngine.setTrack(track.subTrackIndex)
+        if (track.subtrackIndex >= 0) {
+            val switched = VgmEngine.setTrack(track.subtrackIndex)
             if (!switched) {
-                Log.e(TAG, "Failed to set sub-track ${track.subTrackIndex}")
+                Log.e(TAG, "Failed to set sub-track ${track.subtrackIndex}")
             }
         }
 
@@ -444,13 +456,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             VgmEngine.setDeviceVolume(i, SettingsManager.getChipVolume(applicationContext, chipName, current))
         }
         
-        // Merge with database track info - use database values as fallback if GD3 tags are empty
         currentTags = VgmTags(
             trackEn = parsedTags.trackEn.ifEmpty { track.title },
             trackJp = parsedTags.trackJp,
-            gameEn = parsedTags.gameEn.ifEmpty { game.name },
+            gameEn = parsedTags.gameEn,
             gameJp = parsedTags.gameJp,
-            systemEn = parsedTags.systemEn.ifEmpty { game.system },
+            systemEn = parsedTags.systemEn,
             systemJp = parsedTags.systemJp,
             authorEn = parsedTags.authorEn,
             authorJp = parsedTags.authorJp,
@@ -459,13 +470,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             notes = parsedTags.notes
         )
         
-        // Get live duration from engine and compare with stored value
         val liveDurationSamples = VgmEngine.getTotalSamples()
-        val storedDurationSamples = track.durationSamples
-        // Use live duration if available, otherwise fall back to stored duration
-        val effectiveDurationSamples = if (liveDurationSamples > 0) liveDurationSamples else storedDurationSamples
-        trackDurationMs = if (effectiveDurationSamples > 0)
-            effectiveDurationSamples * 1000L / SAMPLE_RATE else 0L
+        trackDurationMs = if (liveDurationSamples > 0) liveDurationSamples * 1000L / SAMPLE_RATE else 0L
 
         // Update MediaSession metadata (→ AVRCP 1.6)
         updateMediaSessionMetadata()
@@ -482,7 +488,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         startRenderJob()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
         startForeground(NOTIF_ID, buildNotification(true))
-        _playbackState.value = PlaybackInfo(true, false, currentGameIdx, currentTrackIdx, track, trackDurationMs)
+        _playbackState.value = PlaybackInfo(true, false, queue.index, track, trackDurationMs)
     }
 
     // Position update tracking
@@ -509,7 +515,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
                             // Channel levels for KSS
-                            val trackPath = _playbackState.value.track?.filePath ?: ""
+                            val trackPath = currentLocalPath.orEmpty()
                             if (trackPath.endsWith(".kss", ignoreCase = true) ||
                                 trackPath.endsWith(".mgs", ignoreCase = true)) {
                                 val spectrums = VgmEngine.getChannelSpectrums()
@@ -543,7 +549,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
                     // Check if track ended
                     if (VgmEngine.isEnded() || (isFadingOut && SystemClock.elapsedRealtime() >= fadeStartTimeMs + FADE_MS)) {
-                        onTrackEnded()
+                        serviceScope.launch { onTrackEnded() }
                         break
                     }
                 }
@@ -579,50 +585,20 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private suspend fun onTrackEnded() {
-        if (documentGame != null) {
-            when (loopMode) {
-                LoopMode.TRACK, LoopMode.GAME -> {
-                    val game = documentGame ?: return
-                    startTrack(game, game.tracks.first())
-                }
-                LoopMode.OFF -> if (documentQueueIndex + 1 < documentQueue.size) {
-                    playDocumentAt(documentQueueIndex + 1)
-                } else {
-                    stopPlayback()
-                }
-            }
-            return
-        }
-
         when (loopMode) {
-            LoopMode.TRACK -> {
-                // Restart same track
-                val game = allGames.getOrNull(currentGameIdx) ?: return
-                val track = game.tracks.getOrNull(currentTrackIdx) ?: return
-                startTrack(game, track)
-            }
-            LoopMode.GAME -> {
-                // Next track in same game, loop to start if at end
-                val game = allGames.getOrNull(currentGameIdx) ?: return
-                val nextT = if (currentTrackIdx + 1 < game.tracks.size) currentTrackIdx + 1 else 0
-                loadAndPlay(currentGameIdx, nextT)
+            LoopMode.TRACK -> startCurrentTrack()
+            LoopMode.QUEUE -> {
+                if (queue.moveNext(wrap = true) != null) startCurrentTrack() else stopPlayback()
             }
             LoopMode.OFF -> {
-                nextTrack()
+                if (queue.moveNext(wrap = false) != null) startCurrentTrack() else stopPlayback()
             }
         }
     }
 
     private fun resumeOrPlay() {
         if (!isPlaying) {
-            documentGame?.let { game ->
-                serviceScope.launch { startTrack(game, game.tracks.first()) }
-                return
-            }
-            // Start first track if nothing is loaded
-            if (currentGameIdx < 0 && allGames.isNotEmpty()) {
-                serviceScope.launch { loadAndPlay(0, 0) }
-            }
+            if (queue.current != null) serviceScope.launch { startCurrentTrack() }
             return
         }
         if (isPaused) {
@@ -647,7 +623,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     private fun stopPlayback() {
         isPlaying = false
-        isPaused  = false
+        isPaused = false
         stopRenderJob()
         serviceScope.launch {
             VgmEngine.stop()
@@ -668,226 +644,25 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     fun nextTrack() {
-        if (documentGame != null) {
-            if (documentQueueIndex + 1 < documentQueue.size) {
-                serviceScope.launch { playDocumentAt(documentQueueIndex + 1) }
-            }
-            return
-        }
-        if (!isFadingOut) {
-            // Manual skip - maybe smaller fade or immediate?
-            // User requested fade out to next track.
-            serviceScope.launch {
+        serviceScope.launch {
+            if (!isFadingOut) {
                 startFadeOut()
-                delay(500) // Short fade for manual skip
-                performNextTrack()
+                delay(500)
             }
-        } else {
-            serviceScope.launch { performNextTrack() }
+            val moved = if (shuffleMode == ShuffleMode.OFF) {
+                queue.moveNext(wrap = loopMode == LoopMode.QUEUE)
+            } else {
+                queue.moveRandom()
+            }
+            if (moved != null) startCurrentTrack()
         }
-    }
-
-    private suspend fun performNextTrack() {
-        allGames = GameLibrary.getAllGames()
-        if (allGames.isEmpty()) return
-        
-        val favoritesOnly = SettingsManager.isFavoritesOnlyMode(applicationContext)
-        
-        val (nextG, nextT) = when (shuffleMode) {
-            ShuffleMode.ALL -> {
-                if (favoritesOnly) {
-                    // Favorites only: only pick from favorite games and tracks
-                    val favoriteGames = allGames.filter { it.entity.isFavorite }
-                    if (favoriteGames.isEmpty()) {
-                        // No favorite games, fall back to all games with favorite tracks
-                        val gamesWithFavTracks = allGames.filter { game -> game.tracks.any { it.isFavorite } }
-                        if (gamesWithFavTracks.isEmpty()) return // No favorites at all
-                        val game = gamesWithFavTracks.random()
-                        val favTracks = game.tracks.filter { it.isFavorite }
-                        val ti = game.tracks.indexOf(favTracks.random())
-                        allGames.indexOf(game) to ti
-                    } else {
-                        val game = favoriteGames.random()
-                        val favTracks = game.tracks.filter { it.isFavorite }
-                        val tracks = if (favTracks.isNotEmpty()) favTracks else game.tracks
-                        val ti = game.tracks.indexOf(tracks.random())
-                        allGames.indexOf(game) to ti
-                    }
-                } else {
-                    // Weighted random: favorite games have 3x weight
-                    val weightedGames = allGames.flatMap { game ->
-                        val weight = if (game.entity.isFavorite) 3 else 1
-                        List(weight) { allGames.indexOf(game) }
-                    }
-                    val gi = weightedGames.random()
-                    // Weighted random: favorite tracks have 3x weight
-                    val game = allGames[gi]
-                    val weightedTracks = game.tracks.flatMap { track ->
-                        val weight = if (track.isFavorite) 3 else 1
-                        List(weight) { game.tracks.indexOf(track) }
-                    }
-                    val ti = weightedTracks.random()
-                    gi to ti
-                }
-            }
-            ShuffleMode.GAME -> {
-                val game = allGames.getOrNull(currentGameIdx) ?: allGames[0]
-                val gi = allGames.indexOf(game)
-                if (favoritesOnly) {
-                    // Favorites only: only pick favorite tracks from this game
-                    val favTracks = game.tracks.filter { it.isFavorite }
-                    if (favTracks.isEmpty()) {
-                        // No favorite tracks in this game, move to next game with favorites
-                        val gamesWithFavTracks = allGames.filter { g -> g.tracks.any { it.isFavorite } }
-                        if (gamesWithFavTracks.isEmpty()) return
-                        val nextGame = gamesWithFavTracks.random()
-                        val nextFavTracks = nextGame.tracks.filter { it.isFavorite }
-                        val ti = nextGame.tracks.indexOf(nextFavTracks.random())
-                        allGames.indexOf(nextGame) to ti
-                    } else {
-                        val ti = game.tracks.indexOf(favTracks.random())
-                        gi to ti
-                    }
-                } else {
-                    // Weighted random: favorite tracks have 3x weight
-                    val weightedTracks = game.tracks.flatMap { track ->
-                        val weight = if (track.isFavorite) 3 else 1
-                        List(weight) { game.tracks.indexOf(track) }
-                    }
-                    val ti = weightedTracks.random()
-                    gi to ti
-                }
-            }
-            ShuffleMode.OFF -> {
-                if (favoritesOnly) {
-                    // Find next favorite track in sequence
-                    findNextFavoriteTrack()
-                } else {
-                    val game = allGames.getOrNull(currentGameIdx)
-                    if (game != null && currentTrackIdx + 1 < game.tracks.size) {
-                        currentGameIdx to currentTrackIdx + 1
-                    } else if (loopMode == LoopMode.GAME && game != null) {
-                        // Loop to start of this game
-                        currentGameIdx to 0
-                    } else {
-                        // Move to next game
-                        val nextG2 = (currentGameIdx + 1) % allGames.size
-                        nextG2 to 0
-                    }
-                }
-            }
-        }
-        loadAndPlay(nextG, nextT)
-    }
-    
-    private fun findNextFavoriteTrack(): Pair<Int, Int> {
-        // Start searching from current position
-        var gi = currentGameIdx
-        var ti = currentTrackIdx + 1
-        
-        // Search current game first
-        val currentGame = allGames.getOrNull(gi)
-        if (currentGame != null) {
-            for (i in ti until currentGame.tracks.size) {
-                if (currentGame.tracks[i].isFavorite) {
-                    return gi to i
-                }
-            }
-        }
-        
-        // Search remaining games
-        for (gIdx in (gi + 1) until allGames.size) {
-            val game = allGames[gIdx]
-            for (tIdx in game.tracks.indices) {
-                if (game.tracks[tIdx].isFavorite) {
-                    return gIdx to tIdx
-                }
-            }
-        }
-        
-        // Wrap around to beginning
-        for (gIdx in 0..gi) {
-            val game = allGames[gIdx]
-            val startIdx = if (gIdx == gi) 0 else 0
-            for (tIdx in startIdx until game.tracks.size) {
-                if (game.tracks[tIdx].isFavorite) {
-                    return gIdx to tIdx
-                }
-            }
-        }
-        
-        // No favorites found, stay at current position
-        return currentGameIdx to currentTrackIdx
-    }
-    
-    private fun findPreviousFavoriteTrack(): Pair<Int, Int> {
-        // Start searching backwards from current position
-        var gi = currentGameIdx
-        var ti = currentTrackIdx - 1
-        
-        // Search current game first (backwards)
-        val currentGame = allGames.getOrNull(gi)
-        if (currentGame != null && ti >= 0) {
-            for (i in ti downTo 0) {
-                if (currentGame.tracks[i].isFavorite) {
-                    return gi to i
-                }
-            }
-        }
-        
-        // Search previous games (backwards)
-        for (gIdx in (gi - 1) downTo 0) {
-            val game = allGames[gIdx]
-            for (tIdx in (game.tracks.size - 1) downTo 0) {
-                if (game.tracks[tIdx].isFavorite) {
-                    return gIdx to tIdx
-                }
-            }
-        }
-        
-        // Wrap around to end
-        for (gIdx in (allGames.size - 1) downTo gi) {
-            val game = allGames[gIdx]
-            val startIdx = if (gIdx == gi) (game.tracks.size - 1) else (game.tracks.size - 1)
-            for (tIdx in startIdx downTo 0) {
-                if (game.tracks[tIdx].isFavorite) {
-                    return gIdx to tIdx
-                }
-            }
-        }
-        
-        // No favorites found, stay at current position
-        return currentGameIdx to currentTrackIdx
     }
 
     fun previousTrack() {
-        if (documentGame != null) {
-            serviceScope.launch {
-                if (documentQueueIndex > 0) playDocumentAt(documentQueueIndex - 1)
-                else documentGame?.let { startTrack(it, it.tracks.first()) }
-            }
-            return
-        }
         serviceScope.launch {
-            allGames = GameLibrary.getAllGames()
-            if (allGames.isEmpty()) return@launch
-            
-            val favoritesOnly = SettingsManager.isFavoritesOnlyMode(applicationContext)
-            
-            if (favoritesOnly) {
-                val (prevG, prevT) = findPreviousFavoriteTrack()
-                loadAndPlay(prevG, prevT)
-            } else {
-                val nextT = if (currentTrackIdx > 0) currentTrackIdx - 1 else {
-                    val prevG = if (currentGameIdx > 0) currentGameIdx - 1 else allGames.size - 1
-                    currentGameIdx = prevG
-                    (allGames[prevG].tracks.size - 1).coerceAtLeast(0)
-                }
-                loadAndPlay(currentGameIdx, nextT)
-            }
+            if (queue.movePrevious() != null) startCurrentTrack()
         }
     }
-
     private fun seekTo(posMs: Long) {
         val samplePos = posMs * SAMPLE_RATE / 1000L
         serviceScope.launch { VgmEngine.seek(samplePos) }
@@ -949,31 +724,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        // Get album art for notification - use game art or fallback
-        val game = currentGame
-        val rawBitmap = if (game?.artPath?.isNotEmpty() == true && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { null }
-        } else null
-        
-        // Crop bitmap to square for notification
-        val largeIcon = if (rawBitmap != null) {
-            // Only crop if not already square
-            if (rawBitmap.width != rawBitmap.height) {
-                val size = minOf(rawBitmap.width, rawBitmap.height)
-                val x = (rawBitmap.width - size) / 2
-                val y = (rawBitmap.height - size) / 2
-                Bitmap.createBitmap(rawBitmap, x, y, size, size)
-            } else {
-                rawBitmap
-            }
-        } else {
-            getFallbackArt()
-        }
+        val largeIcon = getFallbackArt()
 
         return NotificationCompat.Builder(this, NOTIF_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_music_note)
             .setLargeIcon(largeIcon)
-            .setContentTitle(currentTags.displayTitle.ifEmpty { "VGMP" })
+            .setContentTitle(currentTags.displayTitle.ifEmpty { currentTrack?.title ?: "VGMP" })
             .setContentText(currentTags.displayGame)
             .setSubText(currentTags.displaySystem)
             .setContentIntent(contentIntent)
@@ -1011,57 +767,34 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
-        result.detach()
-        serviceScope.launch {
-            allGames = GameLibrary.getAllGames()
-            val items = mutableListOf<MediaBrowserCompat.MediaItem>()
-
-            if (parentId == MEDIA_ID_ROOT) {
-                // Top-level: list of games
-                allGames.forEachIndexed { gi, game ->
-                    // Get album art for Android Auto browsing - use game art or fallback
-                    val artBitmap: Bitmap? = getScaledArtForAuto(game.artPath)
-                    val desc = MediaDescriptionCompat.Builder()
-                        .setMediaId("game/$gi")
-                        .setTitle(game.name)
-                        .setSubtitle(game.system)
-                        .setIconBitmap(artBitmap)
-                        .build()
-                    items.add(MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE))
-                }
-            } else if (parentId.startsWith("game/")) {
-                val gi = parentId.removePrefix("game/").toIntOrNull() ?: run {
-                    result.sendResult(items); return@launch
-                }
-                val game = allGames.getOrNull(gi) ?: run {
-                    result.sendResult(items); return@launch
-                }
-                // Get album art for tracks - use game art or fallback
-                val artBitmap: Bitmap? = getScaledArtForAuto(game.artPath)
-                game.tracks.forEachIndexed { ti, track ->
-                    val durMin = track.durationSamples / SAMPLE_RATE / 60
-                    val durSec = (track.durationSamples / SAMPLE_RATE) % 60
-                    val subtitle = if (track.durationSamples > 0) "%d:%02d".format(durMin, durSec) else ""
-                    val desc = MediaDescriptionCompat.Builder()
-                        .setMediaId("$gi/$ti")
-                        .setTitle(track.title)
-                        .setSubtitle(subtitle)
-                        .setIconBitmap(artBitmap)
-                        .build()
-                    items.add(MediaBrowserCompat.MediaItem(desc, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE))
-                }
+        val items = mutableListOf<MediaBrowserCompat.MediaItem>()
+        val playlists = PlaylistStore.getAll(applicationContext)
+        if (parentId == MEDIA_ID_ROOT) {
+            playlists.forEach { playlist ->
+                val description = MediaDescriptionCompat.Builder()
+                    .setMediaId("playlist/${playlist.id}")
+                    .setTitle(playlist.name)
+                    .setSubtitle("${playlist.tracks.size} tracks")
+                    .setIconBitmap(getScaledArtForAuto())
+                    .build()
+                items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE)
             }
-            result.sendResult(items)
+        } else if (parentId.startsWith("playlist/")) {
+            val playlistId = parentId.removePrefix("playlist/")
+            playlists.firstOrNull { it.id == playlistId }?.tracks?.forEachIndexed { index, track ->
+                val description = MediaDescriptionCompat.Builder()
+                    .setMediaId("track/$playlistId/$index")
+                    .setTitle(track.displayName.substringBeforeLast('.', track.displayName))
+                    .setIconBitmap(getScaledArtForAuto())
+                    .build()
+                items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+            }
         }
+        result.sendResult(items)
     }
-
     // Get scaled art for Android Auto (256x256 is recommended size)
-    private fun getScaledArtForAuto(artPath: String): Bitmap? {
-        val rawBitmap: Bitmap? = if (artPath.isNotEmpty() && File(artPath).exists()) {
-            try { BitmapFactory.decodeFile(artPath) } catch (e: Exception) { null }
-        } else null
-
-        val sourceBitmap = rawBitmap ?: getFallbackArt() ?: return null
+    private fun getScaledArtForAuto(): Bitmap? {
+        val sourceBitmap = getFallbackArt() ?: return null
 
         // Crop to square first (only if not already square)
         val squareBitmap = if (sourceBitmap.width != sourceBitmap.height) {
@@ -1096,116 +829,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     // --- Expose state to bound activities ---
-    val currentGame: Game? get() = documentGame ?: allGames.getOrNull(currentGameIdx)
-    val currentTrack: TrackEntity? get() = currentGame?.tracks?.getOrNull(currentTrackIdx)
+    val currentTrack: TrackRef? get() = queue.current
     val playing: Boolean get() = isPlaying && !isPaused
-    val paused:  Boolean get() = isPlaying && isPaused
+    val paused: Boolean get() = isPlaying && isPaused
     fun getMediaSession() = mediaSession
-    fun getAllLoadedGames() = allGames
-    fun refreshGames() { serviceScope.launch { allGames = GameLibrary.getAllGames() } }
-    fun isCurrentTrackDocument(): Boolean = documentGame != null
-    fun getCurrentDocumentTrack(): DocumentTrack? = documentQueue.getOrNull(documentQueueIndex)
 
     fun isSupportedDocument(displayName: String): Boolean =
         displayName.substringAfterLast('.', "").lowercase() in DIRECT_PLAY_EXTENSIONS
-
-    fun playDocument(uri: Uri, displayName: String) {
-        playDocumentQueue(listOf(DocumentTrack(uri, displayName)), 0)
-    }
-
-    fun playDocumentQueue(queue: List<DocumentTrack>, startIndex: Int) {
-        val playable = queue.filter { isSupportedDocument(it.displayName) }
-        if (playable.isEmpty()) return
-        documentQueue = playable
-        documentQueueIndex = startIndex.coerceIn(playable.indices)
-        serviceScope.launch { playDocumentAt(documentQueueIndex) }
-    }
-
-    private suspend fun playDocumentAt(index: Int) {
-        val document = documentQueue.getOrNull(index) ?: return
-        val uri = document.uri
-        val displayName = document.displayName
-        val extension = displayName.substringAfterLast('.', "").lowercase()
-        if (extension !in DIRECT_PLAY_EXTENSIONS) return
-
-            val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
-            val safeName = displayName
-                .replace(Regex("[^A-Za-z0-9._ -]"), "_")
-                .takeLast(180)
-                .ifEmpty { "track.$extension" }
-            val destination = File(directPlayDir, "${System.currentTimeMillis()}-$safeName")
-
-            try {
-                withContext(Dispatchers.IO) {
-                    contentResolver.openInputStream(uri)?.use { input ->
-                        destination.outputStream().use { output -> input.copyTo(output) }
-                    } ?: throw IOException("Could not open the selected document")
-                }
-            } catch (e: Exception) {
-                destination.delete()
-                Log.e(TAG, "Failed to copy selected document", e)
-                Toast.makeText(applicationContext, "Could not open $displayName", Toast.LENGTH_LONG).show()
-                return
-            }
-
-            val game = Game(
-                entity = org.vlessert.vgmp.library.GameEntity(
-                    id = 0,
-                    name = displayName.substringBeforeLast('.', displayName),
-                    system = "",
-                    author = "",
-                    year = "",
-                    folderPath = directPlayDir.absolutePath,
-                    artPath = "",
-                    zipSource = ""
-                ),
-                tracks = listOf(
-                    TrackEntity(
-                        id = 0,
-                        gameId = 0,
-                        title = displayName.substringBeforeLast('.', displayName),
-                        filePath = destination.absolutePath,
-                        durationSamples = -1,
-                        trackIndex = 0
-                    )
-                )
-            )
-
-            documentGame = game
-            documentQueueIndex = index
-            currentGameIdx = -1
-            currentTrackIdx = 0
-            startTrack(game, game.tracks.first())
-            withContext(Dispatchers.IO) {
-                directPlayDir.listFiles()
-                    ?.filter { it != destination }
-                    ?.forEach { it.delete() }
-            }
-    }
-    
-    fun updateCurrentTrackFavorite(isFavorite: Boolean) {
-        val gameIdx = currentGameIdx
-        val trackIdx = currentTrackIdx
-        if (gameIdx >= 0 && trackIdx >= 0) {
-            val game = allGames.getOrNull(gameIdx) ?: return
-            val track = game.tracks.getOrNull(trackIdx) ?: return
-            val updatedTrack = track.copy(isFavorite = isFavorite)
-            val updatedTracks = game.tracks.toMutableList()
-            updatedTracks[trackIdx] = updatedTrack
-            val updatedGame = game.copy(tracks = updatedTracks)
-            val updatedGames = allGames.toMutableList()
-            updatedGames[gameIdx] = updatedGame
-            allGames = updatedGames
-        }
-    }
-    
-    fun playTrack(game: Game, trackIdx: Int) {
-        val gIdx = allGames.indexOfFirst { it.entity.id == game.entity.id }
-        if (gIdx >= 0) {
-            serviceScope.launch { loadAndPlay(gIdx, trackIdx) }
-        }
-    }
-    
     // --- Fallback album art for Android Auto / media display ---
     private var fallbackArtBitmap: Bitmap? = null
     
@@ -1245,41 +875,16 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
     
     private fun updateMediaSessionMetadata() {
-        val game = currentGame ?: return
-        val rawBitmap: Bitmap? = if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
-            try { BitmapFactory.decodeFile(game.artPath) } catch (e: Exception) { null }
-        } else null
-        
-        // Crop bitmap to square for media session
-        val artBitmap: Bitmap? = if (rawBitmap != null) {
-            // Only crop if not already square
-            if (rawBitmap.width != rawBitmap.height) {
-                val size = minOf(rawBitmap.width, rawBitmap.height)
-                val x = (rawBitmap.width - size) / 2
-                val y = (rawBitmap.height - size) / 2
-                Bitmap.createBitmap(rawBitmap, x, y, size, size)
-            } else {
-                rawBitmap
-            }
-        } else {
-            getFallbackArt()
-        }
-        
+        val track = currentTrack ?: return
         val metaBuilder = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTags.displayTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentTags.displayAuthor.ifEmpty { game.name })
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentTags.displayGame.ifEmpty { game.name })
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, currentTags.displayTitle.ifEmpty { track.title })
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentTags.displayAuthor)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, currentTags.displayGame)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, currentTags.displaySystem)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (currentTrackIdx + 1).toLong())
-            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, game.tracks.size.toLong())
-        
-        // Set duration to 0 in endless loop mode to hide progress bar, otherwise use actual duration
-        val duration = if (endlessLoopMode) 0L else trackDurationMs
-        metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, duration)
-        
-        if (artBitmap != null) {
-            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artBitmap)
-        }
+            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (queue.index + 1).toLong())
+            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, queue.size.toLong())
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, if (endlessLoopMode) 0L else trackDurationMs)
+        getFallbackArt()?.let { metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
         mediaSession.setMetadata(metaBuilder.build())
     }
     fun getEndlessLoop(): Boolean = endlessLoopMode
@@ -1300,7 +905,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
      */
     fun isCurrentTrackSpc(): Boolean {
         val track = currentTrack ?: return false
-        return track.filePath.endsWith(".spc", ignoreCase = true)
+        return track.displayName.endsWith(".spc", ignoreCase = true)
     }
     
     /**
@@ -1309,7 +914,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
      */
     fun isSpeedControlSupported(): Boolean {
         val track = currentTrack ?: return false
-        val path = track.filePath.lowercase()
+        val path = track.displayName.lowercase()
         // KSS files
         if (path.endsWith(".kss")) return false
         // Tracker formats

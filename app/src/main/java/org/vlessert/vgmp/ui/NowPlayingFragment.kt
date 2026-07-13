@@ -1,6 +1,5 @@
 package org.vlessert.vgmp.ui
 
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.app.AlertDialog
 import android.os.Bundle
@@ -23,13 +22,11 @@ import kotlinx.coroutines.launch
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
 import org.vlessert.vgmp.engine.VgmEngine
-import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.settings.SettingsManager
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.views.ChannelSpectrumView
-import java.io.File
 
 class NowPlayingFragment : Fragment() {
 
@@ -166,16 +163,14 @@ class NowPlayingFragment : Fragment() {
         binding.btnRandom.setOnClickListener {
             val svc = service ?: return@setOnClickListener
             val nextMode = when (svc.getShuffle()) {
-                VgmPlaybackService.ShuffleMode.OFF -> VgmPlaybackService.ShuffleMode.GAME
-                VgmPlaybackService.ShuffleMode.GAME -> VgmPlaybackService.ShuffleMode.ALL
-                VgmPlaybackService.ShuffleMode.ALL -> VgmPlaybackService.ShuffleMode.OFF
+                VgmPlaybackService.ShuffleMode.OFF -> VgmPlaybackService.ShuffleMode.ON
+                VgmPlaybackService.ShuffleMode.ON -> VgmPlaybackService.ShuffleMode.OFF
             }
             svc.setShuffle(nextMode)
             updateModeButtons()
             // Show tooltip
             val tooltipText = when (nextMode) {
-                VgmPlaybackService.ShuffleMode.GAME -> getString(R.string.random_current_game)
-                VgmPlaybackService.ShuffleMode.ALL -> getString(R.string.random_library)
+                VgmPlaybackService.ShuffleMode.ON -> getString(R.string.random_queue)
                 VgmPlaybackService.ShuffleMode.OFF -> getString(R.string.random_off)
             }
             showStyledToast(tooltipText)
@@ -184,36 +179,21 @@ class NowPlayingFragment : Fragment() {
             val svc = service ?: return@setOnClickListener
             val nextMode = when (svc.getLoop()) {
                 VgmPlaybackService.LoopMode.OFF -> VgmPlaybackService.LoopMode.TRACK
-                VgmPlaybackService.LoopMode.TRACK -> VgmPlaybackService.LoopMode.GAME
-                VgmPlaybackService.LoopMode.GAME -> VgmPlaybackService.LoopMode.OFF
+                VgmPlaybackService.LoopMode.TRACK -> VgmPlaybackService.LoopMode.QUEUE
+                VgmPlaybackService.LoopMode.QUEUE -> VgmPlaybackService.LoopMode.OFF
             }
             svc.setLoop(nextMode)
             updateModeButtons()
             // Show tooltip
             val tooltipText = when (nextMode) {
                 VgmPlaybackService.LoopMode.TRACK -> getString(R.string.loop_current_track)
-                VgmPlaybackService.LoopMode.GAME -> getString(R.string.loop_current_game)
+                VgmPlaybackService.LoopMode.QUEUE -> getString(R.string.loop_current_queue)
                 VgmPlaybackService.LoopMode.OFF -> getString(R.string.loop_off)
             }
             showStyledToast(tooltipText)
         }
         binding.btnTrackFavorite.setOnClickListener {
-            if (service?.isCurrentTrackDocument() == true) {
-                addCurrentTrackToPlaylist()
-                return@setOnClickListener
-            }
-            val track = service?.currentTrack ?: return@setOnClickListener
-            viewLifecycleOwner.lifecycleScope.launch {
-                GameLibrary.toggleTrackFavorite(track.id)
-                // Reload track to get updated favorite status
-                val updatedTrack = GameLibrary.getTrackById(track.id)
-                if (updatedTrack != null) {
-                    service?.updateCurrentTrackFavorite(updatedTrack.isFavorite)
-                }
-                updateTrackFavoriteButton()
-                // Refresh the library to show updated favorite status
-                (activity as? org.vlessert.vgmp.MainActivity)?.refreshLibrary()
-            }
+            addCurrentTrackToPlaylist()
         }
         binding.btnEndlessLoop.setOnClickListener {
             val svc = service ?: return@setOnClickListener
@@ -268,9 +248,8 @@ class NowPlayingFragment : Fragment() {
     private fun updateUI() {
         val binding = _binding ?: return
         val svc = service ?: return
-        val game = svc.currentGame
         val track = svc.currentTrack
-        if (game == null || track == null) {
+        if (track == null) {
             binding.tvTitle.text = getString(R.string.no_track_playing)
             binding.tvGame.text = ""
             binding.tvSystem.text = ""
@@ -282,16 +261,7 @@ class NowPlayingFragment : Fragment() {
             return
         }
 
-        // Album art
-        if (game.artPath.isNotEmpty() && File(game.artPath).exists()) {
-            try {
-                binding.ivArt.setImageBitmap(BitmapFactory.decodeFile(game.artPath))
-            } catch (e: Exception) {
-                binding.ivArt.setImageResource(R.drawable.vgmp_logo)
-            }
-        } else {
-            binding.ivArt.setImageResource(R.drawable.vgmp_logo)
-        }
+        binding.ivArt.setImageResource(R.drawable.vgmp_logo)
 
         // Duration is now updated via observePlaybackInfo() using live duration from engine
         
@@ -374,12 +344,8 @@ class NowPlayingFragment : Fragment() {
                 binding.btnRandom.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
                 binding.btnRandom.alpha = 0.5f
             }
-            VgmPlaybackService.ShuffleMode.GAME -> {
+            VgmPlaybackService.ShuffleMode.ON -> {
                 binding.btnRandom.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
-                binding.btnRandom.alpha = 1.0f
-            }
-            VgmPlaybackService.ShuffleMode.ALL -> {
-                binding.btnRandom.setColorFilter(resources.getColor(R.color.white, null))
                 binding.btnRandom.alpha = 1.0f
             }
         }
@@ -394,13 +360,13 @@ class NowPlayingFragment : Fragment() {
                 binding.btnLoop.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
                 binding.btnLoop.alpha = 1.0f
             }
-            VgmPlaybackService.LoopMode.GAME -> {
+            VgmPlaybackService.LoopMode.QUEUE -> {
                 binding.btnLoop.setColorFilter(resources.getColor(R.color.white, null))
                 binding.btnLoop.alpha = 1.0f
             }
         }
         
-        // Update track favorite button
+        // Update add-to-playlist button
         updateTrackFavoriteButton()
         
         // Update endless loop button
@@ -418,18 +384,12 @@ class NowPlayingFragment : Fragment() {
             return
         }
         binding.btnTrackFavorite.visibility = View.VISIBLE
-        if (service?.isCurrentTrackDocument() == true) {
-            binding.btnTrackFavorite.setImageResource(R.drawable.ic_playlist)
-            binding.btnTrackFavorite.contentDescription = "Add to playlist"
-            return
-        }
-        binding.btnTrackFavorite.setImageResource(
-            if (track.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
-        )
+        binding.btnTrackFavorite.setImageResource(R.drawable.ic_playlist)
+        binding.btnTrackFavorite.contentDescription = "Add to playlist"
     }
 
     private fun addCurrentTrackToPlaylist() {
-        val document = service?.getCurrentDocumentTrack() ?: return
+        val document = service?.currentTrack ?: return
         val playlists = PlaylistStore.getAll(requireContext())
         val labels = (playlists.map { it.name } + "＋ New playlist").toTypedArray()
         AlertDialog.Builder(requireContext()).setTitle("Add to playlist").setItems(labels) { _, index ->

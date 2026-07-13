@@ -23,6 +23,7 @@ import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.databinding.FragmentBrowserBinding
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
+import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.service.VgmPlaybackService
 
 class BrowserFragment : Fragment() {
@@ -143,8 +144,8 @@ class BrowserFragment : Fragment() {
         }
         val tracks = entries.filterNot { it.directory }
         val start = tracks.indexOf(entry)
-        val queue = tracks.map { VgmPlaybackService.DocumentTrack(it.uri, it.name) }
-        (activity as? MainActivity)?.getService()?.playDocumentQueue(queue, start)
+        val queue = tracks.map { TrackRef(it.uri, it.name) }
+        (activity as? MainActivity)?.getService()?.playQueue(queue, start)
     }
 
     private fun addToPlaylist(entry: Entry) {

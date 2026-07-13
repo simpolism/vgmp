@@ -1,7 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.kapt)
 }
 
 android {
@@ -117,16 +116,12 @@ dependencies {
     implementation(libs.androidx.media)
 
     // Room (game library database)
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    kapt(libs.room.compiler)
 
     // Lifecycle
     implementation(libs.lifecycle.viewmodel.ktx)
     implementation(libs.lifecycle.livedata.ktx)
     
     // RAR extraction for RSN files (SPC archives)
-    implementation("com.github.junrar:junrar:7.5.5")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

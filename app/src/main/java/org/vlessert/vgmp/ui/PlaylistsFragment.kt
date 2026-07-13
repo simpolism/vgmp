@@ -16,6 +16,7 @@ import org.vlessert.vgmp.databinding.FragmentPlaylistsBinding
 import org.vlessert.vgmp.playlists.Playlist
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
+import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.service.VgmPlaybackService
 
 class PlaylistsFragment : Fragment() {
@@ -75,8 +76,8 @@ class PlaylistsFragment : Fragment() {
     }
 
     private fun playPlaylist(playlist: Playlist, index: Int) {
-        val queue = playlist.tracks.map { VgmPlaybackService.DocumentTrack(it.uri, it.displayName) }
-        (activity as? MainActivity)?.getService()?.playDocumentQueue(queue, index)
+        val queue = playlist.tracks.map { TrackRef(it.uri, it.displayName) }
+        (activity as? MainActivity)?.getService()?.playQueue(queue, index)
         (activity as? MainActivity)?.selectPlayerTab()
     }
 

@@ -23,7 +23,7 @@
                 android:src="@drawable/vgmp_logo"
                 android:contentDescription="Album art" />
 
-            <!-- Track title with favorite and endless loop buttons -->
+            <!-- Track title with playlist and endless loop buttons -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -61,9 +61,9 @@
                     android:layout_marginStart="8dp"
                     android:scaleType="fitCenter"
                     android:background="?attr/selectableItemBackgroundBorderless"
-                    android:src="@drawable/ic_star_border"
+                    android:src="@drawable/ic_playlist"
                     android:tint="@color/vgmp_accent"
-                    android:contentDescription="Toggle track favorite" />
+                    android:contentDescription="Add track to playlist" />
             </LinearLayout>
 
             <!-- Game name -->

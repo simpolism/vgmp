@@ -1,21 +1,25 @@
 [submodule "app/src/main/cpp/libvgm"]
 	path = app/src/main/cpp/libvgm
-	url = https://github.com/ValleyBell/libvgm.git
+	url = https://github.com/simpolism/libvgm.git
+	branch = vgmp-android
 [submodule "app/src/main/cpp/libgme"]
 	path = app/src/main/cpp/libgme
 	url = https://github.com/libgme/game-music-emu.git
 [submodule "app/src/main/cpp/libopenmpt"]
 	path = app/src/main/cpp/libopenmpt
-	url = https://github.com/OpenMPT/openmpt.git
+	url = https://github.com/simpolism/openmpt.git
+	branch = vgmp-android
 [submodule "app/src/main/cpp/libkss"]
 	path = app/src/main/cpp/libkss
-	url = https://github.com/digital-sound-antiques/libkss.git
+	url = https://github.com/simpolism/libkss.git
+	branch = vgmp-android
 [submodule "app/src/main/cpp/libADLMIDI"]
 	path = app/src/main/cpp/libADLMIDI
 	url = https://github.com/Wohlstand/libADLMIDI.git
 [submodule "app/src/main/cpp/libpsf"]
 	path = app/src/main/cpp/libpsf
-	url = https://github.com/CoreDumpling/sexypsf.git
+	url = https://github.com/simpolism/sexypsf.git
+	branch = vgmp-android
 [submodule "app/src/main/cpp/libMusDoom"]
 	path = app/src/main/cpp/libMusDoom
 	url = https://github.com/niekvlessert/libMusDoom.git

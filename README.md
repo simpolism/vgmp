@@ -1,89 +1,64 @@
 # VGMP — Video Game Music Player for Android
 
-VGMP is a fast, offline‑first Android player for video game music formats. It scans local packs and you can search the whole VGMRips archive and browse SNESMusic.org to download music into the player. It plays a wide range of chip‑tune, console, and tracker formats with smooth playback and a visual spectrum analyzer.
+VGMP is a fully offline Android player for video game music. It browses files through Android's Storage Access Framework, plays directly from user-selected folders, and stores named playlists as lightweight URI references without importing a filesystem-sized library.
 
 ## Features
-- Wide format support (VGM/VGZ, NSF/GBS/SPC, KSS, trackers, MIDI, Doom MUS/LMP, RSN)
-- Offline library with favorites, search, and shuffle/loop modes, slow down to play along
-- VGM Rips downloader with search and chip filters
-- Advanced audio visualization: Full-screen kaleidoscope/bars and per-channel spectrum analyzers
-- Deep audio control: Volume adjustment per sound chip and Mute/Solo per channel
-- Bluetooth media controls (AVRCP‑style playback/seek/metadata)
-- Android Auto/MediaSession integration
 
-## Supported Formats
-VGMP supports the following file types (case‑insensitive):
-- **VGM/VGZ**: `.vgm`, `.vgz`
-- **GME formats**: `.nsf`, `.nsfe`, `.gbs`, `.gym`, `.hes`, `.ay`, `.sap`, `.spc`
-- **KSS/MSX**: `.kss`, `.mgs`, `.bgm`, `.opx`, `.mpk`, `.mbm`
-- **Tracker**: `.mod`, `.xm`, `.s3m`, `.it`, `.mptm`, `.stm`, `.far`, `.ult`, `.med`, `.mtm`, `.psm`, `.amf`, `.okt`, `.dsm`, `.dtm`, `.umx`
-- **MIDI**: `.mid`, `.midi`, `.rmi`, `.smf`
-- **Doom MUS/LMP**: `.mus`, `.lmp`
-- **RSN (SPC archives)**: `.rsn`
+- Folder-first browsing with persistent access to a selected music tree
+- Named playlists without duplicating audio files
+- VGM/VGZ, GME, KSS/MSX, tracker, MIDI, Doom MUS/LMP, and PSF playback
+- Per-chip volume profiles plus channel mute and solo controls
+- Spectrum and per-channel visualizers
+- Playback speed and loop controls where supported
+- Bluetooth media controls and playlist browsing through Android Auto
+- No network or broad storage permissions
 
-## Tech Stack
-- Kotlin + AndroidX
-- Native engines via CMake + NDK
-- Room database for library
-- WorkManager for downloads
+## Supported formats
 
-## Build Requirements
-- Android Studio (or command line tools) with JDK 17
-- Android SDK (compile/target SDK 35)
-- NDK + CMake (configured by the project)
-- Git submodules initialized
+- VGM: `.vgm`, `.vgz`
+- GME: `.nsf`, `.nsfe`, `.gbs`, `.gym`, `.hes`, `.ay`, `.sap`, `.spc`
+- KSS/MSX: `.kss`, `.mgs`, `.bgm`, `.opx`, `.mpk`, `.mbm`
+- Trackers: `.mod`, `.xm`, `.s3m`, `.it`, `.mptm`, `.stm`, `.far`, `.ult`, `.med`, `.mtm`, `.psm`, `.amf`, `.okt`, `.dsm`, `.dtm`, `.umx`
+- MIDI: `.mid`, `.midi`, `.rmi`, `.smf`
+- Doom: `.mus`, `.lmp`
+- PlayStation: `.psf`, `.psf1`, `.psf2`, `.minipsf`, `.minipsf1`, `.minipsf2`
 
-## Setup
+## Build requirements
+
+- JDK 17 or newer
+- Android SDK 35
+- Android NDK and CMake as configured by the project
+- Git with submodule support
+
+## Setup and build
+
 ```bash
-git submodule update --init --recursive
-# Some libraries require patching for advanced features (automatic during build)
-./app/src/main/cpp/prepare_libvgm_source.sh
-./app/src/main/cpp/prepare_libkss_source.sh
-```
-
-## Build
-Debug APK:
-```bash
+git clone --recurse-submodules https://github.com/simpolism/vgmp.git
+cd vgmp
 ./gradlew assembleDebug
 ```
 
-Release APK:
+For an existing checkout:
+
+```bash
+git submodule sync --recursive
+git submodule update --init --recursive
+```
+
+Release APKs are produced with:
+
 ```bash
 ./gradlew assembleRelease
 ```
 
-The APKs will be in `app/build/outputs/apk/`.
+Outputs are written beneath `app/build/outputs/apk/`.
 
-## Usage
-1. Launch VGMP.
-2. Some packs are bundled with the apk, or tap the download button to fetch packs from VGM Rips.
-3. Search and play from the library.
-4. Use Settings to choose spectrum analyzer style and which VGM types are shown/playable.
+## Native dependencies
 
-## Settings
-- **Analyzer**: enable/disable and select style
-- **VGM types**: choose which formats appear in the library and are playable
-- **Playback**: favorites‑only mode, loop/shuffle, etc.
+Native playback engines live in `app/src/main/cpp`. VGMP-specific integrations for libvgm, libopenmpt, libkss, and sexypsf are committed on the `vgmp-android` branches of the corresponding `simpolism` forks. Builds therefore do not patch or modify submodule working trees.
 
-## Bluetooth / Media Controls
-VGMP exposes a MediaSession, so Bluetooth head units and controllers can use play/pause/next/previous/seek and see track metadata.
-
-## Project Structure
-- `app/src/main/java/org/vlessert/vgmp` — app code
-- `app/src/main/cpp` — native audio engines + JNI
-- `app/src/main/res` — UI resources
-
-## Credits
-VGMP integrates several excellent open‑source audio engines:
-- libvgm
-- Game Music Emu (libgme)
-- libopenmpt
-- libkss
-- libADLMIDI
-- libMusDoom
+Other engines include Game Music Emu, libADLMIDI, and libMusDoom.
 
 ## License
-MIT
 
-## Contributing
-Issues and PRs are welcome once the repository is public.
+MIT. Native dependencies retain their respective licenses.

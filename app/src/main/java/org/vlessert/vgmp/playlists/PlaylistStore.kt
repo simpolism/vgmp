@@ -6,7 +6,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-data class PlaylistTrack(val uri: Uri, val displayName: String)
+data class PlaylistTrack(val uri: Uri, val displayName: String, val archiveEntry: String? = null)
 data class Playlist(val id: String, val name: String, val tracks: List<PlaylistTrack>)
 
 object PlaylistStore {
@@ -25,7 +25,11 @@ object PlaylistStore {
                     name = item.getString("name"),
                     tracks = List(tracksJson.length()) { trackIndex ->
                         val track = tracksJson.getJSONObject(trackIndex)
-                        PlaylistTrack(Uri.parse(track.getString("uri")), track.getString("name"))
+                        PlaylistTrack(
+                            Uri.parse(track.getString("uri")),
+                            track.getString("name"),
+                            track.optString("archiveEntry").takeIf { it.isNotEmpty() }
+                        )
                     }
                 )
             }
@@ -40,16 +44,20 @@ object PlaylistStore {
 
     fun addTrack(context: Context, playlistId: String, track: PlaylistTrack) {
         val updated = getAll(context).map { playlist ->
-            if (playlist.id == playlistId && playlist.tracks.none { it.uri == track.uri }) {
+            if (playlist.id == playlistId && playlist.tracks.none {
+                    it.uri == track.uri && it.archiveEntry == track.archiveEntry
+                }) {
                 playlist.copy(tracks = playlist.tracks + track)
             } else playlist
         }
         save(context, updated)
     }
 
-    fun removeTrack(context: Context, playlistId: String, trackUri: Uri) {
+    fun removeTrack(context: Context, playlistId: String, track: PlaylistTrack) {
         save(context, getAll(context).map { playlist ->
-            if (playlist.id == playlistId) playlist.copy(tracks = playlist.tracks.filterNot { it.uri == trackUri })
+            if (playlist.id == playlistId) playlist.copy(tracks = playlist.tracks.filterNot {
+                it.uri == track.uri && it.archiveEntry == track.archiveEntry
+            })
             else playlist
         })
     }
@@ -62,7 +70,12 @@ object PlaylistStore {
         playlists.forEach { playlist ->
             val tracks = JSONArray()
             playlist.tracks.forEach { track ->
-                tracks.put(JSONObject().put("uri", track.uri.toString()).put("name", track.displayName))
+                tracks.put(
+                    JSONObject()
+                        .put("uri", track.uri.toString())
+                        .put("name", track.displayName)
+                        .put("archiveEntry", track.archiveEntry ?: "")
+                )
             }
             json.put(JSONObject().put("id", playlist.id).put("name", playlist.name).put("tracks", tracks))
         }

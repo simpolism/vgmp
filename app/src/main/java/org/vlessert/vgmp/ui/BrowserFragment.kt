@@ -25,23 +25,32 @@ import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.playback.SupportedFormats
+import org.vlessert.vgmp.playback.ZipArchiveStore
 import org.vlessert.vgmp.service.VgmPlaybackService
+import org.vlessert.vgmp.settings.SettingsManager
 
 class BrowserFragment : Fragment() {
     data class Entry(
         val uri: Uri,
         val name: String,
         val directory: Boolean,
-        val playable: Boolean = false
+        val playable: Boolean = false,
+        val target: Location? = null,
+        val track: TrackRef? = null
     )
+
+    sealed interface Location {
+        data class Document(val uri: Uri) : Location
+        data class Zip(val archiveUri: Uri, val archiveName: String, val path: String = "") : Location
+    }
 
     private var _binding: FragmentBrowserBinding? = null
     private val binding get() = _binding!!
     private val entries = mutableListOf<Entry>()
-    private val history = ArrayDeque<Uri>()
+    private val history = ArrayDeque<Location>()
     private lateinit var adapter: EntryAdapter
     private var rootUri: Uri? = null
-    private var currentUri: Uri? = null
+    private var currentLocation: Location? = null
     private var loadGeneration = 0
 
     private val chooseFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -53,7 +62,7 @@ class BrowserFragment : Fragment() {
             uri, DocumentsContract.getTreeDocumentId(uri)
         )
         rootUri = documentUri
-        currentUri = documentUri
+        currentLocation = Location.Document(documentUri)
         history.clear()
         prefs().edit().putString(KEY_ROOT, documentUri.toString()).putString(KEY_CURRENT, documentUri.toString()).apply()
         loadDirectory()
@@ -72,23 +81,33 @@ class BrowserFragment : Fragment() {
         binding.btnUp.setOnClickListener { navigateUp() }
 
         rootUri = prefs().getString(KEY_ROOT, null)?.let(Uri::parse)
-        currentUri = prefs().getString(KEY_CURRENT, null)?.let(Uri::parse) ?: rootUri
+        currentLocation = (prefs().getString(KEY_CURRENT, null)?.let(Uri::parse) ?: rootUri)
+            ?.let(Location::Document)
         loadDirectory()
     }
 
     fun navigateUp(): Boolean {
-        val parent = history.removeLastOrNull() ?: persistedParent() ?: return false
-        currentUri = parent
-        prefs().edit().putString(KEY_CURRENT, parent.toString()).apply()
+        val parent = history.removeLastOrNull() ?: run {
+            val document = currentLocation as? Location.Document ?: return false
+            persistedParent()?.let(Location::Document) ?: return false
+        }
+        currentLocation = parent
+        if (parent is Location.Document) {
+            prefs().edit().putString(KEY_CURRENT, parent.uri.toString()).apply()
+        }
         loadDirectory()
         return true
     }
 
     private fun loadDirectory() {
-        val directory = currentUri
+        val location = currentLocation
         val generation = ++loadGeneration
-        binding.btnUp.isEnabled = directory != null && directory != rootUri
-        if (directory == null) {
+        binding.btnUp.isEnabled = when (location) {
+            is Location.Zip -> true
+            is Location.Document -> location.uri != rootUri
+            null -> false
+        }
+        if (location == null) {
             binding.tvPath.text = "Browse"
             binding.tvEmpty.visibility = View.VISIBLE
             entries.clear()
@@ -101,12 +120,19 @@ class BrowserFragment : Fragment() {
         binding.progress.visibility = View.VISIBLE
         binding.tvEmpty.visibility = View.GONE
         viewLifecycleOwner.lifecycleScope.launch {
-            val loaded = withContext(Dispatchers.IO) { runCatching { queryChildren(directory) } }
+            val loaded = withContext(Dispatchers.IO) {
+                runCatching {
+                    when (location) {
+                        is Location.Document -> queryChildren(location.uri)
+                        is Location.Zip -> queryZip(location)
+                    }
+                }
+            }
             if (generation != loadGeneration) return@launch
             if (loaded.isFailure) {
                 binding.progress.visibility = View.GONE
                 binding.recyclerEntries.visibility = View.VISIBLE
-                Toast.makeText(requireContext(), "This folder is no longer available", Toast.LENGTH_LONG).show()
+                Toast.makeText(requireContext(), "Could not open this folder or ZIP archive", Toast.LENGTH_LONG).show()
                 return@launch
             }
             entries.clear()
@@ -114,7 +140,12 @@ class BrowserFragment : Fragment() {
             adapter.notifyDataSetChanged()
             binding.progress.visibility = View.GONE
             binding.recyclerEntries.visibility = View.VISIBLE
-            binding.tvPath.text = directory.lastPathSegment?.substringAfterLast(':')?.ifEmpty { "Music" } ?: "Music"
+            binding.tvPath.text = when (location) {
+                is Location.Document -> location.uri.lastPathSegment
+                    ?.substringAfterLast(':')?.ifEmpty { "Music" } ?: "Music"
+                is Location.Zip -> if (location.path.isEmpty()) location.archiveName
+                    else "${location.archiveName}/${location.path}"
+            }
             binding.tvEmpty.text = "This folder is empty"
             binding.tvEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
         }
@@ -136,19 +167,44 @@ class BrowserFragment : Fragment() {
                 val name = cursor.getString(1) ?: continue
                 val mime = cursor.getString(2)
                 val isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR
+                val uri = DocumentsContract.buildDocumentUriUsingTree(directory, id)
+                val browseZip = !isDirectory && name.endsWith(".zip", ignoreCase = true) &&
+                    SettingsManager.isZipBrowsingEnabled(requireContext())
+                val track = if (!isDirectory && SupportedFormats.supports(name)) TrackRef(uri, name) else null
                 result += Entry(
-                    uri = DocumentsContract.buildDocumentUriUsingTree(directory, id),
+                    uri = uri,
                     name = name,
-                    directory = isDirectory,
-                    playable = !isDirectory && SupportedFormats.supports(name)
+                    directory = isDirectory || browseZip,
+                    playable = track != null,
+                    target = when {
+                        isDirectory -> Location.Document(uri)
+                        browseZip -> Location.Zip(uri, name)
+                        else -> null
+                    },
+                    track = track
                 )
             }
         }
         return result.sortedWith(compareBy<Entry> { !it.directory }.thenBy { it.name.lowercase() })
     }
 
+    private fun queryZip(location: Location.Zip): List<Entry> =
+        ZipArchiveStore(requireContext()).list(location.archiveUri, location.path).map { item ->
+            val track = if (!item.directory && SupportedFormats.supports(item.displayName)) {
+                TrackRef(location.archiveUri, item.displayName, archiveEntry = item.path)
+            } else null
+            Entry(
+                uri = location.archiveUri,
+                name = item.displayName,
+                directory = item.directory,
+                playable = track != null,
+                target = if (item.directory) location.copy(path = item.path) else null,
+                track = track
+            )
+        }
+
     private fun persistedParent(): Uri? {
-        val current = currentUri ?: return null
+        val current = (currentLocation as? Location.Document)?.uri ?: return null
         val root = rootUri ?: return null
         if (current == root) return null
         return runCatching {
@@ -160,44 +216,57 @@ class BrowserFragment : Fragment() {
     }
 
     private fun openEntry(entry: Entry) {
-        if (entry.directory) {
-            currentUri?.let(history::addLast)
-            currentUri = entry.uri
-            prefs().edit().putString(KEY_CURRENT, entry.uri.toString()).apply()
+        entry.target?.let { target ->
+            currentLocation?.let(history::addLast)
+            currentLocation = target
+            if (target is Location.Document) {
+                prefs().edit().putString(KEY_CURRENT, target.uri.toString()).apply()
+            }
             loadDirectory()
             return
         }
-        if (!entry.playable) {
+        val selectedTrack = entry.track
+        if (selectedTrack == null) {
             Toast.makeText(requireContext(), "${entry.name} is not supported yet", Toast.LENGTH_SHORT).show()
             return
         }
-        val tracks = entries.filter { it.playable }
-        val start = tracks.indexOf(entry)
-        val queue = tracks.map { TrackRef(it.uri, it.name) }
+        val tracks = entries.mapNotNull { it.track }
+        val start = tracks.indexOf(selectedTrack)
+        val queue = tracks
         (activity as? MainActivity)?.getService()?.playQueue(queue, start)
+        if (SettingsManager.openPlayerOnSelection(requireContext())) {
+            (activity as? MainActivity)?.selectPlayerTab()
+        }
     }
 
     private fun addToPlaylist(entry: Entry) {
-        if (entry.directory || !entry.playable) return
+        val track = entry.track ?: return
         val playlists = PlaylistStore.getAll(requireContext())
         val labels = (playlists.map { it.name } + "＋ New playlist").toTypedArray()
         AlertDialog.Builder(requireContext()).setTitle("Add to playlist").setItems(labels) { _, index ->
             if (index == playlists.size) createPlaylistWith(entry)
             else {
-                PlaylistStore.addTrack(requireContext(), playlists[index].id, PlaylistTrack(entry.uri, entry.name))
+                PlaylistStore.addTrack(
+                    requireContext(), playlists[index].id,
+                    PlaylistTrack(track.uri, track.displayName, track.archiveEntry)
+                )
                 Toast.makeText(requireContext(), "Added to ${playlists[index].name}", Toast.LENGTH_SHORT).show()
             }
         }.show()
     }
 
     private fun createPlaylistWith(entry: Entry) {
+        val track = entry.track ?: return
         val input = EditText(requireContext()).apply { hint = "Playlist name" }
         AlertDialog.Builder(requireContext()).setTitle("New playlist").setView(input)
             .setPositiveButton("Create") { _, _ ->
                 val name = input.text.toString().trim()
                 if (name.isNotEmpty()) {
                     val playlist = PlaylistStore.create(requireContext(), name)
-                    PlaylistStore.addTrack(requireContext(), playlist.id, PlaylistTrack(entry.uri, entry.name))
+                    PlaylistStore.addTrack(
+                        requireContext(), playlist.id,
+                        PlaylistTrack(track.uri, track.displayName, track.archiveEntry)
+                    )
                 }
             }.setNegativeButton("Cancel", null).show()
     }

@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout
-    xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:background="@color/vgmp_background">
+    android:background="@color/vgmp_background"
+    android:orientation="vertical">
 
     <androidx.appcompat.widget.Toolbar
         android:id="@+id/toolbar"
@@ -19,8 +18,7 @@
 
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:fillViewport="true">
+        android:layout_height="match_parent">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -28,14 +26,114 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <TextView
+            <TextView style="@style/VGMP.SettingsHeader" android:text="UI" />
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switch_open_player_on_selection"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Playback Effects"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold" />
+                android:paddingVertical="10dp"
+                android:text="Open Player when selecting a track"
+                android:textColor="@color/vgmp_text_primary" />
 
+            <TextView style="@style/VGMP.SettingsHeader" android:text="Filesystem" />
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switch_zip_browsing"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingVertical="10dp"
+                android:text="Browse ZIP archives as folders"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <TextView style="@style/VGMP.SettingsHeader" android:text="Visualization" />
+            <TextView style="@style/VGMP.SettingsLabel" android:text="Fullscreen style" />
+            <RadioGroup
+                android:id="@+id/radio_analyzer_style"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <RadioButton
+                    android:id="@+id/radio_kaleidoscope"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Kaleidoscope"
+                    android:textColor="@color/vgmp_text_primary" />
+                <RadioButton
+                    android:id="@+id/radio_bars"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Prism Bars"
+                    android:textColor="@color/vgmp_text_primary" />
+            </RadioGroup>
+
+            <TextView style="@style/VGMP.SettingsLabel" android:text="Frequency axis" />
+            <RadioGroup
+                android:id="@+id/radio_visualizer_axis"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <RadioButton
+                    android:id="@+id/radio_axis_linear"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Linear"
+                    android:textColor="@color/vgmp_text_primary" />
+                <RadioButton
+                    android:id="@+id/radio_axis_log"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Logarithmic"
+                    android:textColor="@color/vgmp_text_primary" />
+            </RadioGroup>
+
+            <TextView style="@style/VGMP.SettingsLabel" android:text="Amplitude response" />
+            <RadioGroup
+                android:id="@+id/radio_visualizer_response"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <RadioButton
+                    android:id="@+id/radio_response_raw"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Raw"
+                    android:textColor="@color/vgmp_text_primary" />
+                <RadioButton
+                    android:id="@+id/radio_response_balanced"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Balanced"
+                    android:textColor="@color/vgmp_text_primary" />
+            </RadioGroup>
+
+            <TextView style="@style/VGMP.SettingsLabel" android:text="Refresh rate" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <SeekBar
+                    android:id="@+id/seekbar_visualizer_fps"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="30"
+                    android:progressTint="@color/vgmp_accent"
+                    android:thumbTint="@color/vgmp_accent" />
+                <TextView
+                    android:id="@+id/tv_visualizer_fps"
+                    android:layout_width="64dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:textColor="@color/vgmp_text_secondary" />
+            </LinearLayout>
+
+            <TextView style="@style/VGMP.SettingsHeader" android:text="Chip / backend" />
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_bass_enabled"
                 android:layout_width="match_parent"
@@ -43,7 +141,6 @@
                 android:paddingVertical="10dp"
                 android:text="Bass boost"
                 android:textColor="@color/vgmp_text_primary" />
-
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_reverb_enabled"
                 android:layout_width="match_parent"
@@ -51,51 +148,6 @@
                 android:paddingVertical="10dp"
                 android:text="Reverb"
                 android:textColor="@color/vgmp_text_primary" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginBottom="20dp"
-                android:background="@color/vgmp_divider" />
-
-            <!-- Spectrum Analyzer Section -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Fullscreen Visualizer"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginBottom="8dp" />
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Visualizer style"
-                android:textColor="@color/vgmp_text_primary"
-                android:textSize="16sp" />
-
-            <RadioGroup
-                android:id="@+id/radio_analyzer_style"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp">
-
-                <RadioButton
-                    android:id="@+id/radio_kaleidoscope"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Kaleidoscope"
-                    android:textColor="@color/vgmp_text_primary" />
-
-                <RadioButton
-                    android:id="@+id/radio_bars"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="Prism Bars"
-                    android:textColor="@color/vgmp_text_primary" />
-            </RadioGroup>
-
-
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

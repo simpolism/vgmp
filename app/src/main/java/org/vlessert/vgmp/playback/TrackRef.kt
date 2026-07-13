@@ -6,7 +6,8 @@ import android.net.Uri
 data class TrackRef(
     val uri: Uri,
     val displayName: String,
-    val subtrackIndex: Int = -1
+    val subtrackIndex: Int = -1,
+    val archiveEntry: String? = null
 ) {
     val title: String get() = displayName.substringBeforeLast('.', displayName)
 }

@@ -421,7 +421,10 @@ class NowPlayingFragment : Fragment() {
         val labels = (playlists.map { it.name } + "＋ New playlist").toTypedArray()
         AlertDialog.Builder(requireContext()).setTitle("Add to playlist").setItems(labels) { _, index ->
             if (index < playlists.size) {
-                PlaylistStore.addTrack(requireContext(), playlists[index].id, PlaylistTrack(document.uri, document.displayName))
+                PlaylistStore.addTrack(
+                    requireContext(), playlists[index].id,
+                    PlaylistTrack(document.uri, document.displayName, document.archiveEntry)
+                )
                 showStyledToast("Added to ${playlists[index].name}")
             } else {
                 val input = EditText(requireContext()).apply { hint = "Playlist name" }
@@ -430,7 +433,10 @@ class NowPlayingFragment : Fragment() {
                         val name = input.text.toString().trim()
                         if (name.isNotEmpty()) {
                             val playlist = PlaylistStore.create(requireContext(), name)
-                            PlaylistStore.addTrack(requireContext(), playlist.id, PlaylistTrack(document.uri, document.displayName))
+                            PlaylistStore.addTrack(
+                                requireContext(), playlist.id,
+                                PlaylistTrack(document.uri, document.displayName, document.archiveEntry)
+                            )
                         }
                     }.setNegativeButton("Cancel", null).show()
             }

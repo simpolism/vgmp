@@ -38,6 +38,7 @@ import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.playback.PlaybackQueue
 import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.playback.TrackRef
+import org.vlessert.vgmp.playback.ZipArchiveStore
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
@@ -96,7 +97,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
     
     private var lastSpectrumUpdateMs = 0L
-    private val SPECTRUM_UPDATE_INTERVAL_MS = 24L // Audio arrives in ~23 ms buffers (~42 fps)
 
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
@@ -204,7 +204,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             if (parts.size != 3 || parts[0] != "track") return
             val playlist = PlaylistStore.getAll(applicationContext).firstOrNull { it.id == parts[1] } ?: return
             val index = parts[2].toIntOrNull() ?: return
-            playQueue(playlist.tracks.map { TrackRef(it.uri, it.displayName) }, index)
+            playQueue(
+                playlist.tracks.map { TrackRef(it.uri, it.displayName, archiveEntry = it.archiveEntry) },
+                index
+            )
         }
         override fun onSetRepeatMode(repeatMode: Int) {
             loopMode = when (repeatMode) {
@@ -347,9 +350,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         return try {
             withContext(Dispatchers.IO) {
                 directPlayDir.listFiles()?.filter { it != destination }?.forEach { it.delete() }
-                contentResolver.openInputStream(track.uri)?.use { input ->
-                    destination.outputStream().use { output -> input.copyTo(output) }
-                } ?: throw IOException("Could not open the selected document")
+                destination.outputStream().use { output ->
+                    if (track.archiveEntry != null) {
+                        ZipArchiveStore(applicationContext).copyEntry(track.uri, track.archiveEntry, output)
+                    } else {
+                        contentResolver.openInputStream(track.uri)?.use { input -> input.copyTo(output) }
+                            ?: throw IOException("Could not open the selected document")
+                    }
+                }
             }
             destination.absolutePath
         } catch (e: Exception) {
@@ -502,7 +510,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
                         // Update spectrum for UI
                         val nowSpectrum = SystemClock.elapsedRealtime()
-                        if (nowSpectrum - lastSpectrumUpdateMs >= SPECTRUM_UPDATE_INTERVAL_MS) {
+                        val spectrumIntervalMs = 1000L / SettingsManager.getVisualizerFps(applicationContext)
+                        if (nowSpectrum - lastSpectrumUpdateMs >= spectrumIntervalMs) {
                             lastSpectrumUpdateMs = nowSpectrum
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())

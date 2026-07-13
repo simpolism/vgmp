@@ -76,7 +76,7 @@ class PlaylistsFragment : Fragment() {
     }
 
     private fun playPlaylist(playlist: Playlist, index: Int) {
-        val queue = playlist.tracks.map { TrackRef(it.uri, it.displayName) }
+        val queue = playlist.tracks.map { TrackRef(it.uri, it.displayName, archiveEntry = it.archiveEntry) }
         (activity as? MainActivity)?.getService()?.playQueue(queue, index)
         (activity as? MainActivity)?.selectPlayerTab()
     }
@@ -98,7 +98,10 @@ class PlaylistsFragment : Fragment() {
 
     private fun removeTrack(playlist: Playlist, track: PlaylistTrack) {
         AlertDialog.Builder(requireContext()).setTitle("Remove ${track.displayName}?")
-            .setPositiveButton("Remove") { _, _ -> PlaylistStore.removeTrack(requireContext(), playlist.id, track.uri); refresh() }
+            .setPositiveButton("Remove") { _, _ ->
+                PlaylistStore.removeTrack(requireContext(), playlist.id, track)
+                refresh()
+            }
             .setNegativeButton("Cancel", null).show()
     }
 

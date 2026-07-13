@@ -8,9 +8,10 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.util.AttributeSet
 import android.view.View
-import kotlin.math.max
-import kotlin.math.ln
+import org.vlessert.vgmp.settings.SettingsManager
 import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.sqrt
 
 class SpectrumBarsView @JvmOverloads constructor(
@@ -72,27 +73,44 @@ class SpectrumBarsView @JvmOverloads constructor(
         val n = magnitudes.size
         val binned = FloatArray(bandCount)
 
-        // True logarithmic bands avoid repeating the first few FFT bins. RMS pooling
-        // keeps a single narrow peak from dominating an entire visual band.
+        val logarithmic = SettingsManager.getVisualizerAxis(context) ==
+            SettingsManager.VISUALIZER_AXIS_LOG
+        val balanced = SettingsManager.getVisualizerResponse(context) ==
+            SettingsManager.VISUALIZER_RESPONSE_BALANCED
+
+        // RMS pooling keeps a single narrow peak from dominating a visual band.
         val logMax = ln(n.toFloat())
         for (i in 0 until bandCount) {
-            val start = exp(logMax * i / bandCount).toInt().coerceIn(1, n - 1)
-            val end = exp(logMax * (i + 1) / bandCount).toInt().coerceIn(start + 1, n)
+            val start = if (logarithmic) {
+                exp(logMax * i / bandCount).toInt()
+            } else {
+                1 + i * (n - 1) / bandCount
+            }.coerceIn(1, n - 1)
+            val end = if (logarithmic) {
+                exp(logMax * (i + 1) / bandCount).toInt()
+            } else {
+                1 + (i + 1) * (n - 1) / bandCount
+            }.coerceIn(start + 1, n)
             var sumSquares = 0f
             for (j in start until end) {
                 val v = magnitudes[j]
                 sumSquares += v * v
             }
             val rms = sqrt(sumSquares / (end - start))
-            binned[i] = SpectrumScale.level(rms, i.toFloat() / (bandCount - 1))
+            binned[i] = if (balanced) {
+                SpectrumScale.level(rms, i.toFloat() / (bandCount - 1))
+            } else {
+                (rms / 255f * 0.9f).coerceIn(0f, 0.9f)
+            }
         }
 
         if (smoothed == null || smoothed!!.size != bandCount) {
             smoothed = binned.copyOf()
             peaks = binned.copyOf()
         } else {
-            val attack = 0.75f
-            val release = 0.3f
+            // Time-based smoothing keeps the response consistent at every FPS setting.
+            val attack = (1.0 - exp((-dt / 12f).toDouble())).toFloat()
+            val release = (1.0 - exp((-dt / 55f).toDouble())).toFloat()
             val peakFall = 0.025f * (dt / 16f)
             for (i in 0 until bandCount) {
                 val target = binned[i]

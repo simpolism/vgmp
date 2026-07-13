@@ -12,6 +12,7 @@ class KaleidoscopeView @JvmOverloads constructor(
 
     private var spectrumData: FloatArray? = null
     private var rotationAngle = 0f
+    private var lastDrawMs = 0L
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
     }
@@ -62,6 +63,10 @@ class KaleidoscopeView @JvmOverloads constructor(
         
         val magnitudes = spectrumData ?: return
         if (magnitudes.isEmpty()) return
+
+        val now = System.currentTimeMillis()
+        val dt = if (lastDrawMs == 0L) 16f else (now - lastDrawMs).coerceAtMost(50).toFloat()
+        lastDrawMs = now
         
         val width = width.toFloat()
         val height = height.toFloat()
@@ -96,13 +101,14 @@ class KaleidoscopeView @JvmOverloads constructor(
             for (i in 0 until binCount) {
                 val current = smoothedMagnitudes!![i]
                 val target = binned[i]
-                val alpha = if (target > current) 0.55f else 0.2f
+                val timeConstantMs = if (target > current) 20f else 72f
+                val alpha = (1.0 - exp((-dt / timeConstantMs).toDouble())).toFloat()
                 smoothedMagnitudes!![i] = current + (target - current) * alpha
             }
         }
         
         // Rotate slowly
-        rotationAngle += 0.5f
+        rotationAngle += 0.03125f * dt
         if (rotationAngle >= 360f) rotationAngle -= 360f
         
         canvas.save()

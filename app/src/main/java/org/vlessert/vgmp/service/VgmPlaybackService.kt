@@ -36,6 +36,7 @@ import org.vlessert.vgmp.VgmServiceBinder
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.playback.PlaybackQueue
+import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
@@ -58,14 +59,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val MEDIA_ID_ROOT = "root"
         private const val TAG = "VgmPlaybackService"
         private const val FADE_MS = 2000L
-        private val DIRECT_PLAY_EXTENSIONS = setOf(
-            "vgm", "vgz", "nsf", "nsfe", "gbs", "gym", "hes", "ay", "sap", "spc",
-            "kss", "mgs", "bgm", "opx", "mpk", "mbm",
-            "mod", "xm", "s3m", "it", "mptm", "stm", "far", "ult", "med", "mtm",
-            "psm", "amf", "okt", "dsm", "dtm", "umx",
-            "mid", "midi", "rmi", "smf", "mus", "lmp",
-            "psf", "psf1", "psf2", "minipsf", "minipsf1", "minipsf2"
-        )
     }
 
     enum class ShuffleMode { OFF, ON }
@@ -346,11 +339,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private suspend fun materialize(track: TrackRef): String? {
-        val extension = track.displayName.substringAfterLast('.', "").lowercase()
-        if (extension !in DIRECT_PLAY_EXTENSIONS) return null
+        if (!SupportedFormats.supports(track.displayName)) return null
         val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
         val safeName = track.displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
-            .takeLast(180).ifEmpty { "track.$extension" }
+            .takeLast(180).ifEmpty { "track" }
         val destination = File(directPlayDir, "current-$safeName")
         return try {
             withContext(Dispatchers.IO) {
@@ -835,7 +827,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     fun getMediaSession() = mediaSession
 
     fun isSupportedDocument(displayName: String): Boolean =
-        displayName.substringAfterLast('.', "").lowercase() in DIRECT_PLAY_EXTENSIONS
+        SupportedFormats.supports(displayName)
     // --- Fallback album art for Android Auto / media display ---
     private var fallbackArtBitmap: Bitmap? = null
     

@@ -24,10 +24,16 @@ import org.vlessert.vgmp.databinding.FragmentBrowserBinding
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.playback.TrackRef
+import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.service.VgmPlaybackService
 
 class BrowserFragment : Fragment() {
-    data class Entry(val uri: Uri, val name: String, val directory: Boolean)
+    data class Entry(
+        val uri: Uri,
+        val name: String,
+        val directory: Boolean,
+        val playable: Boolean = false
+    )
 
     private var _binding: FragmentBrowserBinding? = null
     private val binding get() = _binding!!
@@ -70,7 +76,7 @@ class BrowserFragment : Fragment() {
     }
 
     fun navigateUp(): Boolean {
-        val parent = history.removeLastOrNull() ?: return false
+        val parent = history.removeLastOrNull() ?: persistedParent() ?: return false
         currentUri = parent
         prefs().edit().putString(KEY_CURRENT, parent.toString()).apply()
         loadDirectory()
@@ -79,7 +85,7 @@ class BrowserFragment : Fragment() {
 
     private fun loadDirectory() {
         val directory = currentUri
-        binding.btnUp.isEnabled = history.isNotEmpty()
+        binding.btnUp.isEnabled = directory != null && directory != rootUri
         if (directory == null) {
             binding.tvPath.text = "Browse"
             binding.tvEmpty.visibility = View.VISIBLE
@@ -101,7 +107,7 @@ class BrowserFragment : Fragment() {
             adapter.notifyDataSetChanged()
             binding.progress.visibility = View.GONE
             binding.tvPath.text = directory.lastPathSegment?.substringAfterLast(':')?.ifEmpty { "Music" } ?: "Music"
-            binding.tvEmpty.text = "No supported tracks or folders here"
+            binding.tvEmpty.text = "This folder is empty"
             binding.tvEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
         }
     }
@@ -122,17 +128,28 @@ class BrowserFragment : Fragment() {
                 val name = cursor.getString(1) ?: continue
                 val mime = cursor.getString(2)
                 val isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR
-                if (isDirectory || isSupported(name)) {
-                    result += Entry(DocumentsContract.buildDocumentUriUsingTree(directory, id), name, isDirectory)
-                }
+                result += Entry(
+                    uri = DocumentsContract.buildDocumentUriUsingTree(directory, id),
+                    name = name,
+                    directory = isDirectory,
+                    playable = !isDirectory && SupportedFormats.supports(name)
+                )
             }
         }
         return result.sortedWith(compareBy<Entry> { !it.directory }.thenBy { it.name.lowercase() })
     }
 
-    private fun isSupported(name: String): Boolean =
-        (activity as? MainActivity)?.getService()?.isSupportedDocument(name)
-            ?: name.substringAfterLast('.', "").lowercase() in FALLBACK_EXTENSIONS
+    private fun persistedParent(): Uri? {
+        val current = currentUri ?: return null
+        val root = rootUri ?: return null
+        if (current == root) return null
+        return runCatching {
+            val rootId = DocumentsContract.getDocumentId(root)
+            val currentId = DocumentsContract.getDocumentId(current)
+            val parentId = parentDocumentId(rootId, currentId)
+            DocumentsContract.buildDocumentUriUsingTree(root, parentId)
+        }.getOrDefault(root)
+    }
 
     private fun openEntry(entry: Entry) {
         if (entry.directory) {
@@ -142,14 +159,18 @@ class BrowserFragment : Fragment() {
             loadDirectory()
             return
         }
-        val tracks = entries.filterNot { it.directory }
+        if (!entry.playable) {
+            Toast.makeText(requireContext(), "${entry.name} is not supported yet", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val tracks = entries.filter { it.playable }
         val start = tracks.indexOf(entry)
         val queue = tracks.map { TrackRef(it.uri, it.name) }
         (activity as? MainActivity)?.getService()?.playQueue(queue, start)
     }
 
     private fun addToPlaylist(entry: Entry) {
-        if (entry.directory) return
+        if (entry.directory || !entry.playable) return
         val playlists = PlaylistStore.getAll(requireContext())
         val labels = (playlists.map { it.name } + "＋ New playlist").toTypedArray()
         AlertDialog.Builder(requireContext()).setTitle("Add to playlist").setItems(labels) { _, index ->
@@ -193,7 +214,12 @@ class BrowserFragment : Fragment() {
         override fun getItemCount() = items.size
         override fun onBindViewHolder(holder: Holder, position: Int) {
             val item = items[position]
-            holder.text.text = if (item.directory) "📁  ${item.name}" else "♪  ${item.name}"
+            holder.text.text = when {
+                item.directory -> "📁  ${item.name}"
+                item.playable -> "♪  ${item.name}"
+                else -> "·  ${item.name}"
+            }
+            holder.text.alpha = if (!item.directory && !item.playable) 0.55f else 1f
             holder.text.setOnClickListener { click(item) }
             holder.text.setOnLongClickListener { longClick(item); true }
         }
@@ -202,7 +228,13 @@ class BrowserFragment : Fragment() {
     companion object {
         private const val KEY_ROOT = "root_uri"
         private const val KEY_CURRENT = "current_uri"
-        private val FALLBACK_EXTENSIONS = setOf("vgm", "vgz", "nsf", "nsfe", "gbs", "gym", "hes", "ay", "sap", "spc", "kss", "mgs", "bgm", "opx", "mpk", "mbm", "mod", "xm", "s3m", "it", "mptm", "mid", "midi", "mus", "lmp", "psf", "psf1", "psf2")
         fun newInstance() = BrowserFragment()
     }
+}
+
+internal fun parentDocumentId(rootId: String, currentId: String): String {
+    if (currentId == rootId) return rootId
+    return currentId.substringBeforeLast('/', rootId)
+        .takeIf { it == rootId || it.startsWith("$rootId/") }
+        ?: rootId
 }

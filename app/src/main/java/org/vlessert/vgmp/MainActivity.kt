@@ -14,12 +14,17 @@ import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.graphics.Color
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
@@ -78,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        applySystemBarInsets()
         setSupportActionBar(binding.toolbar)
         requestPermissionsIfNeeded()
         startPlaybackService()
@@ -142,6 +148,30 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    private fun applySystemBarInsets() {
+        val toolbarBaseHeight = binding.toolbar.layoutParams.height
+        val toolbarBasePaddingTop = binding.toolbar.paddingTop
+        val contentBaseTopMargin =
+            (binding.fragmentContainer.layoutParams as ViewGroup.MarginLayoutParams).topMargin
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, windowInsets ->
+            val statusBarTop = windowInsets
+                .getInsets(WindowInsetsCompat.Type.statusBars())
+                .top
+
+            binding.toolbar.updateLayoutParams {
+                height = toolbarBaseHeight + statusBarTop
+            }
+            binding.toolbar.updatePadding(top = toolbarBasePaddingTop + statusBarTop)
+            binding.fragmentContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = contentBaseTopMargin + statusBarTop
+            }
+
+            windowInsets
+        }
+        ViewCompat.requestApplyInsets(binding.root)
     }
     
     private fun setupMainAutoHide() {

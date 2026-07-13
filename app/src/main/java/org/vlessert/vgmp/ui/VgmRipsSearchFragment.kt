@@ -7,7 +7,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
-import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkManager
 import kotlinx.coroutines.Dispatchers
@@ -24,7 +23,7 @@ import java.net.URL
 
 private const val TAG = "VgmRipsSearch"
 
-class VgmRipsSearchFragment : DialogFragment() {
+class VgmRipsSearchFragment : InsetAwareDialogFragment() {
 
     private var _binding: FragmentVgmripsSearchBinding? = null
     private val binding get() = _binding!!

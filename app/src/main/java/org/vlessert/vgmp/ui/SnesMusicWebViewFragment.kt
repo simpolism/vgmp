@@ -10,7 +10,6 @@ import android.webkit.*
 import android.widget.FrameLayout
 import android.widget.ProgressBar
 import android.widget.Toast
-import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,7 +22,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-class SnesMusicWebViewFragment : DialogFragment() {
+class SnesMusicWebViewFragment : InsetAwareDialogFragment() {
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar

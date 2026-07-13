@@ -5,7 +5,6 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.*
-import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import androidx.work.WorkManager
 import kotlinx.coroutines.launch
@@ -15,7 +14,7 @@ import org.vlessert.vgmp.download.DownloadSources
 import org.vlessert.vgmp.download.DownloadWorker
 import org.vlessert.vgmp.databinding.FragmentDownloadBinding
 
-class DownloadDialogFragment : DialogFragment() {
+class DownloadDialogFragment : InsetAwareDialogFragment() {
 
     private var _binding: FragmentDownloadBinding? = null
     private val binding get() = _binding!!

@@ -33,6 +33,8 @@
 
     <style name="VGMP.BottomSheet" parent="Widget.Material3.BottomSheet">
         <item name="backgroundTint">@android:color/transparent</item>
+        <item name="paddingTopSystemWindowInsets">true</item>
+        <item name="paddingBottomSystemWindowInsets">true</item>
     </style>
 
     <style name="VGMP.Button.Green" parent="Widget.Material3.Button">

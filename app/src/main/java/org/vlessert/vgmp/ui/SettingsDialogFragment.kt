@@ -6,7 +6,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
 import android.widget.Toast
-import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
 import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
@@ -16,7 +15,7 @@ import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
 import kotlinx.coroutines.launch
 
-class SettingsDialogFragment : DialogFragment() {
+class SettingsDialogFragment : InsetAwareDialogFragment() {
 
     private var _binding: FragmentSettingsBinding? = null
     private val binding get() = _binding!!

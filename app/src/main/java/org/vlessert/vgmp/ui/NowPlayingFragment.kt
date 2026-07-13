@@ -2,6 +2,7 @@ package org.vlessert.vgmp.ui
 
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.app.AlertDialog
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,9 +13,10 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.SeekBar
+import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -22,11 +24,14 @@ import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.library.GameLibrary
+import org.vlessert.vgmp.settings.SettingsManager
+import org.vlessert.vgmp.playlists.PlaylistStore
+import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.views.ChannelSpectrumView
 import java.io.File
 
-class NowPlayingFragment : BottomSheetDialogFragment() {
+class NowPlayingFragment : Fragment() {
 
     private var _binding: FragmentNowPlayingBinding? = null
     private val binding get() = _binding!!
@@ -45,8 +50,6 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         fun newInstance() = NowPlayingFragment()
     }
 
-    override fun getTheme() = R.style.BottomSheetStyle
-
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentNowPlayingBinding.inflate(inflater, container, false)
         return binding.root
@@ -60,17 +63,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
         startPositionUpdater()
         observePlaybackInfo()
 
-        // Set peek height after layout so the sheet only shows content up to the toggle buttons row
-        view.post {
-            try {
-                val parent = view.parent as? com.google.android.material.bottomsheet.BottomSheetBehavior<*>
-                    ?: com.google.android.material.bottomsheet.BottomSheetBehavior.from(view.parent as android.view.View)
-                parent.peekHeight = binding.toggleControlsRow.bottom + 8.dpToPx()
-            } catch (_: Exception) {}
-        }
     }
-
-    private fun Int.dpToPx(): Int = (this * resources.displayMetrics.density + 0.5f).toInt()
     
     // Helper extension for building colored spanned strings
     private fun buildSpannedString(builderAction: SpannableStringBuilder.() -> Unit): Spanned {
@@ -205,6 +198,10 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             showStyledToast(tooltipText)
         }
         binding.btnTrackFavorite.setOnClickListener {
+            if (service?.isCurrentTrackDocument() == true) {
+                addCurrentTrackToPlaylist()
+                return@setOnClickListener
+            }
             val track = service?.currentTrack ?: return@setOnClickListener
             viewLifecycleOwner.lifecycleScope.launch {
                 GameLibrary.toggleTrackFavorite(track.id)
@@ -421,9 +418,36 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
             return
         }
         binding.btnTrackFavorite.visibility = View.VISIBLE
+        if (service?.isCurrentTrackDocument() == true) {
+            binding.btnTrackFavorite.setImageResource(R.drawable.ic_playlist)
+            binding.btnTrackFavorite.contentDescription = "Add to playlist"
+            return
+        }
         binding.btnTrackFavorite.setImageResource(
             if (track.isFavorite) R.drawable.ic_star else R.drawable.ic_star_border
         )
+    }
+
+    private fun addCurrentTrackToPlaylist() {
+        val document = service?.getCurrentDocumentTrack() ?: return
+        val playlists = PlaylistStore.getAll(requireContext())
+        val labels = (playlists.map { it.name } + "＋ New playlist").toTypedArray()
+        AlertDialog.Builder(requireContext()).setTitle("Add to playlist").setItems(labels) { _, index ->
+            if (index < playlists.size) {
+                PlaylistStore.addTrack(requireContext(), playlists[index].id, PlaylistTrack(document.uri, document.displayName))
+                showStyledToast("Added to ${playlists[index].name}")
+            } else {
+                val input = EditText(requireContext()).apply { hint = "Playlist name" }
+                AlertDialog.Builder(requireContext()).setTitle("New playlist").setView(input)
+                    .setPositiveButton("Create") { _, _ ->
+                        val name = input.text.toString().trim()
+                        if (name.isNotEmpty()) {
+                            val playlist = PlaylistStore.create(requireContext(), name)
+                            PlaylistStore.addTrack(requireContext(), playlist.id, PlaylistTrack(document.uri, document.displayName))
+                        }
+                    }.setNegativeButton("Cancel", null).show()
+            }
+        }.show()
     }
 
     private fun updateEndlessLoopButton() {
@@ -515,6 +539,7 @@ class NowPlayingFragment : BottomSheetDialogFragment() {
                         if (fromUser) {
                             viewLifecycleOwner.lifecycleScope.launch {
                                 VgmEngine.setDeviceVolume(i, p)
+                                SettingsManager.setChipVolume(requireContext(), name, p)
                             }
                         }
                     }

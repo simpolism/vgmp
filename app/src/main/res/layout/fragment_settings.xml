@@ -28,6 +28,36 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Playback Effects"
+                android:textColor="@color/vgmp_accent"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switch_bass_enabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingVertical="10dp"
+                android:text="Bass boost"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switch_reverb_enabled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingVertical="10dp"
+                android:text="Reverb"
+                android:textColor="@color/vgmp_text_primary" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginBottom="20dp"
+                android:background="@color/vgmp_divider" />
+
             <!-- Spectrum Analyzer Section -->
             <TextView
                 android:layout_width="match_parent"
@@ -144,175 +174,6 @@
                     android:textColor="@color/vgmp_text_secondary"
                     android:textSize="14sp"
                     android:gravity="end" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/vgmp_divider"
-                android:layout_marginTop="16dp" />
-
-            <!-- VGM Types Section -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="VGM Types"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="8dp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Select which types are shown and playable"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp"
-                android:layout_marginBottom="8dp" />
-
-            <CheckBox
-                android:id="@+id/check_type_vgm"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="VGM/VGZ"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_gme"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="NSF/GBS/SPC/etc (GME)"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_kss"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="KSS/MSX"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_tracker"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Tracker (MOD/XM/S3M/IT)"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_midi"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="MIDI"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_mus"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Doom MUS/LMP"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <CheckBox
-                android:id="@+id/check_type_rsn"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="RSN (SPC archives)"
-                android:textColor="@color/vgmp_text_primary" />
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="16dp"
-                android:background="@color/vgmp_divider" />
-
-            <!-- Playback Section -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Playback"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginTop="24dp"
-                android:layout_marginBottom="8dp" />
-
-            <!-- Favorites Only Mode -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingVertical="12dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <TextView
-                        android:layout_width="0dp"
-                        android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:text="Favorites Only Mode"
-                        android:textColor="@color/vgmp_text_primary"
-                        android:textSize="16sp" />
-
-                    <androidx.appcompat.widget.SwitchCompat
-                        android:id="@+id/switch_favorites_only"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:tint="@color/vgmp_accent" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:text="When enabled, only favorite tracks and games will play during automatic playback"
-                    android:textColor="@color/vgmp_text_secondary"
-                    android:textSize="12sp"
-                    android:layout_marginTop="4dp" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="16dp"
-                android:background="@color/vgmp_divider" />
-
-            <!-- Library Section -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Library"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:layout_marginTop="16dp"
-                android:layout_marginBottom="8dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="8dp">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btn_import"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/import_library"
-                    android:layout_marginEnd="8dp"
-                    app:icon="@drawable/ic_import" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btn_export"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="@string/export_library"
-                    app:icon="@drawable/ic_export" />
             </LinearLayout>
 
         </LinearLayout>

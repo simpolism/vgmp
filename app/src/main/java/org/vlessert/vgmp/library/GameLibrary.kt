@@ -68,7 +68,7 @@ data class Game(
 
 /**
  * Singleton that manages the VGM game library:
- * - Extracts bundled assets + user-downloaded ZIPs
+ * - Extracts bundled assets and user-provided archives
  * - Indexes into Room DB
  * - Provides search
  */
@@ -1491,7 +1491,7 @@ object GameLibrary {
     
     /**
      * Import an RSN file (RAR archive containing SPC files) directly.
-     * This is used when downloading RSN files from the SNES Music Archive.
+     * This supports importing a user-provided RSN file.
      */
     suspend fun importRsn(inputStream: InputStream, rsnName: String): Game? =
         withContext(Dispatchers.IO) {

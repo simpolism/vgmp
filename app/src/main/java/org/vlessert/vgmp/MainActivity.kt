@@ -37,8 +37,9 @@ import kotlinx.coroutines.launch
 import org.vlessert.vgmp.databinding.ActivityMainBinding
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.service.VgmPlaybackService
-import org.vlessert.vgmp.ui.LibraryFragment
+import org.vlessert.vgmp.ui.BrowserFragment
 import org.vlessert.vgmp.ui.NowPlayingFragment
+import org.vlessert.vgmp.ui.PlaylistsFragment
 import org.vlessert.vgmp.settings.SettingsManager
 
 class MainActivity : AppCompatActivity() {
@@ -47,6 +48,8 @@ class MainActivity : AppCompatActivity() {
     private var playbackService: VgmPlaybackService? = null
     private var serviceBound = false
     private var isAnalyzerVisible = false
+    private var currentTabId = R.id.nav_browse
+    private var navigationInsetBottom = 0
     
     // Auto-hide for main screen
     private var lastInteractionTime = System.currentTimeMillis()
@@ -64,8 +67,6 @@ class MainActivity : AppCompatActivity() {
                     updateMiniPlayer()
                 }
             }
-            supportFragmentManager.fragments.filterIsInstance<LibraryFragment>()
-                .forEach { it.onServiceConnected(playbackService!!) }
             supportFragmentManager.fragments.filterIsInstance<NowPlayingFragment>()
                 .forEach { it.onServiceConnected(playbackService!!) }
             
@@ -88,12 +89,15 @@ class MainActivity : AppCompatActivity() {
         requestPermissionsIfNeeded()
         startPlaybackService()
 
+        binding.bottomNavigation.setOnItemSelectedListener { item -> showTab(item.itemId); true }
         if (savedInstanceState == null) {
-            showFragment(LibraryFragment.newInstance())
+            binding.bottomNavigation.selectedItemId = R.id.nav_browse
+        } else {
+            binding.bottomNavigation.post { showTab(binding.bottomNavigation.selectedItemId) }
         }
 
         binding.miniPlayer.root.setOnClickListener {
-            showNowPlayingSheet()
+            selectPlayerTab()
         }
         binding.miniPlayer.btnMiniPrev.setOnClickListener {
             playbackService?.previousTrack()
@@ -139,13 +143,9 @@ class MainActivity : AppCompatActivity() {
         // Handle back button for library minimization
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                val libraryFragment = supportFragmentManager.fragments.filterIsInstance<LibraryFragment>().firstOrNull()
-                if (libraryFragment != null && libraryFragment.hasExpandedGames()) {
-                    libraryFragment.collapseAll()
-                } else {
-                    // Minimize app instead of leaving immediately
-                    moveTaskToBack(true)
-                }
+                val browser = supportFragmentManager.findFragmentByTag("tab_browse") as? BrowserFragment
+                if (currentTabId == R.id.nav_browse && browser?.navigateUp() == true) return
+                moveTaskToBack(true)
             }
         })
     }
@@ -155,6 +155,8 @@ class MainActivity : AppCompatActivity() {
         val toolbarBasePaddingTop = binding.toolbar.paddingTop
         val contentBaseTopMargin =
             (binding.fragmentContainer.layoutParams as ViewGroup.MarginLayoutParams).topMargin
+        val navigationBaseHeight = binding.bottomNavigation.layoutParams.height
+        val navigationBasePaddingBottom = binding.bottomNavigation.paddingBottom
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, windowInsets ->
             val statusBarTop = windowInsets
@@ -168,6 +170,14 @@ class MainActivity : AppCompatActivity() {
             binding.fragmentContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
                 topMargin = contentBaseTopMargin + statusBarTop
             }
+            val navigationBottom = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
+            navigationInsetBottom = navigationBottom
+            binding.bottomNavigation.updateLayoutParams { height = navigationBaseHeight + navigationBottom }
+            binding.bottomNavigation.updatePadding(bottom = navigationBasePaddingBottom + navigationBottom)
+            binding.miniPlayer.root.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                bottomMargin = 64.dp + navigationBottom
+            }
+            updateContentBottomMargin()
 
             windowInsets
         }
@@ -191,19 +201,17 @@ class MainActivity : AppCompatActivity() {
         autoHideRunnable = object : Runnable {
             override fun run() {
                 val timeout = SettingsManager.getFadeTimeout(this@MainActivity) * 1000L
-                val isPlayerOpen = supportFragmentManager.findFragmentByTag("now_playing")?.isVisible == true
+                val isPlayerOpen = currentTabId == R.id.nav_player
                 val isSettingsOpen = supportFragmentManager.findFragmentByTag("settings")?.isVisible == true
-                val isDownloadOpen = supportFragmentManager.findFragmentByTag("download")?.isVisible == true
-                val isVgmRipsOpen = supportFragmentManager.findFragmentByTag("vgmrips_search")?.isVisible == true
                 val isPlaying = playbackService?.playing == true
                 
                 // Only trigger kaleidoscope if:
                 // - Timeout is set (> 0)
                 // - Kaleidoscope not already visible
-                // - No dialogs are open (player, settings, download, vgmrips)
+                // - No dialogs are open (player or settings)
                 // - Music is actually playing
                 // - Inactivity timeout reached
-                val anyDialogOpen = isPlayerOpen || isSettingsOpen || isDownloadOpen || isVgmRipsOpen
+                val anyDialogOpen = isPlayerOpen || isSettingsOpen
                 if (timeout > 0 && !isAnalyzerVisible && !anyDialogOpen && isPlaying && System.currentTimeMillis() - lastInteractionTime >= timeout) {
                     showAnalyzer()
                 }
@@ -245,11 +253,6 @@ class MainActivity : AppCompatActivity() {
         if (playbackService?.playing != true) return
         
         isAnalyzerVisible = true
-        
-        // Dismiss any open bottom sheet (NowPlayingFragment)
-        supportFragmentManager.findFragmentByTag("now_playing")?.let { fragment ->
-            (fragment as? NowPlayingFragment)?.dismiss()
-        }
         
         // Hide system UI for true fullscreen
         hideSystemUI()
@@ -356,18 +359,38 @@ class MainActivity : AppCompatActivity() {
         bindService(intent, serviceConnection, BIND_AUTO_CREATE)
     }
 
-    private fun showFragment(fragment: Fragment, addToBack: Boolean = false) {
-        val tx = supportFragmentManager.beginTransaction()
-            .replace(R.id.fragment_container, fragment)
-        if (addToBack) tx.addToBackStack(null)
-        tx.commit()
+    private fun showTab(itemId: Int) {
+        currentTabId = itemId
+        val (fragment, tag, title) = when (itemId) {
+            R.id.nav_playlists -> Triple(PlaylistsFragment.newInstance(), "tab_playlists", "Playlists")
+            R.id.nav_player -> Triple(NowPlayingFragment.newInstance(), "tab_player", "Now Playing")
+            else -> Triple(BrowserFragment.newInstance(), "tab_browse", "Browse")
+        }
+        supportActionBar?.title = title
+        val target = supportFragmentManager.findFragmentByTag(tag) ?: fragment
+        val transaction = supportFragmentManager.beginTransaction()
+        supportFragmentManager.fragments
+            .filter { it.id == R.id.fragment_container && it != target }
+            .forEach(transaction::hide)
+        if (target.isAdded) transaction.show(target) else transaction.add(R.id.fragment_container, target, tag)
+        transaction.commit()
+        val playerTab = itemId == R.id.nav_player
+        binding.miniPlayer.root.visibility = if (playerTab) View.GONE else View.VISIBLE
+        updateContentBottomMargin()
     }
 
-    fun showNowPlayingSheet() {
-        val sheet = NowPlayingFragment.newInstance()
-        playbackService?.let { sheet.onServiceConnected(it) }
-        sheet.show(supportFragmentManager, "now_playing")
+    private fun updateContentBottomMargin() {
+        val playerTab = currentTabId == R.id.nav_player
+        binding.fragmentContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+            bottomMargin = (if (playerTab) 64.dp else 136.dp) + navigationInsetBottom
+        }
     }
+
+    fun selectPlayerTab() {
+        binding.bottomNavigation.selectedItemId = R.id.nav_player
+    }
+
+    private val Int.dp: Int get() = (this * resources.displayMetrics.density + 0.5f).toInt()
 
     fun updateMiniPlayer() {
         val svc = playbackService ?: return
@@ -394,12 +417,6 @@ class MainActivity : AppCompatActivity() {
     fun getService() = playbackService
     
     fun refreshLibrary() {
-        supportFragmentManager.fragments.filterIsInstance<LibraryFragment>()
-            .forEach { fragment ->
-                lifecycleScope.launch {
-                    fragment.refreshView()
-                }
-            }
         // Refresh playback service's game list
         playbackService?.refreshGames()
     }
@@ -409,63 +426,11 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    override fun onPrepareOptionsMenu(menu: Menu): Boolean {
-        super.onPrepareOptionsMenu(menu)
-        // Update the checked state of bass and reverb menu items
-        lifecycleScope.launch {
-            try {
-                val bassItem = menu.findItem(R.id.action_bass)
-                val reverbItem = menu.findItem(R.id.action_reverb)
-                val isBassEnabled = VgmEngine.getBassEnabled()
-                val isReverbEnabled = VgmEngine.getReverbEnabled()
-                
-                if (bassItem != null) {
-                    bassItem.isChecked = isBassEnabled
-                    bassItem.icon?.setTint(if (isBassEnabled) Color.GREEN else Color.WHITE)
-                }
-                if (reverbItem != null) {
-                    reverbItem.isChecked = isReverbEnabled
-                    reverbItem.icon?.setTint(if (isReverbEnabled) Color.GREEN else Color.WHITE)
-                }
-            } catch (e: Exception) {
-                // Engine not initialized yet, ignore
-            }
-        }
-        return true
-    }
-
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_download -> {
-                org.vlessert.vgmp.ui.DownloadDialogFragment.newInstance()
-                    .show(supportFragmentManager, "download")
-                true
-            }
             R.id.action_settings -> {
                 org.vlessert.vgmp.ui.SettingsDialogFragment.newInstance()
                     .show(supportFragmentManager, "settings")
-                true
-            }
-            R.id.action_bass -> {
-                // Toggle bass
-                lifecycleScope.launch {
-                    val currentBass = VgmEngine.getBassEnabled()
-                    VgmEngine.setBassEnabled(!currentBass)
-                    val newBass = !currentBass
-                    item.isChecked = newBass
-                    item.icon?.setTint(if (newBass) Color.GREEN else Color.WHITE)
-                }
-                true
-            }
-            R.id.action_reverb -> {
-                // Toggle reverb
-                lifecycleScope.launch {
-                    val currentReverb = VgmEngine.getReverbEnabled()
-                    VgmEngine.setReverbEnabled(!currentReverb)
-                    val newReverb = !currentReverb
-                    item.isChecked = newReverb
-                    item.icon?.setTint(if (newReverb) Color.GREEN else Color.WHITE)
-                }
                 true
             }
             else -> super.onOptionsItemSelected(item)

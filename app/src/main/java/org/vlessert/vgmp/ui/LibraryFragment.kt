@@ -183,7 +183,7 @@ class LibraryFragment : Fragment() {
                 adapter.notifyNowPlaying()
             }
         }
-        // Observe library ready state to refresh when downloads complete
+        // Refresh once the playback service has loaded local library state
         viewLifecycleOwner.lifecycleScope.launch {
             svc.libraryReady.collectLatest { ready ->
                 if (ready) {
@@ -201,7 +201,7 @@ class LibraryFragment : Fragment() {
         if (results.isEmpty()) {
             binding.emptyText.visibility = View.VISIBLE
             binding.emptyText.text = if (query.isBlank()) {
-                "No games in library.\nDownload some from the menu!"
+                "No games in library.\nTap the open-file button to play a track."
             } else {
                 getString(R.string.empty_library)
             }

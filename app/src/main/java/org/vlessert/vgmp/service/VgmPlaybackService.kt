@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
@@ -39,6 +40,7 @@ import org.vlessert.vgmp.library.GameLibrary
 import org.vlessert.vgmp.library.TrackEntity
 import org.vlessert.vgmp.settings.SettingsManager
 import java.io.File
+import java.io.IOException
 import android.widget.Toast
 
 class VgmPlaybackService : MediaBrowserServiceCompat() {
@@ -47,7 +49,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val NOTIF_CHANNEL_ID = "vgmp_playback"
         const val NOTIF_ID = 1
         const val SAMPLE_RATE = 44100
-        const val BUFFER_FRAMES = 4096
+        const val BUFFER_FRAMES = 1024
         const val ACTION_PLAY   = "org.vlessert.vgmp.ACTION_PLAY"
         const val ACTION_PAUSE  = "org.vlessert.vgmp.ACTION_PAUSE"
         const val ACTION_NEXT   = "org.vlessert.vgmp.ACTION_NEXT"
@@ -56,6 +58,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val MEDIA_ID_ROOT = "root"
         private const val TAG = "VgmPlaybackService"
         private const val FADE_MS = 2000L
+        private val DIRECT_PLAY_EXTENSIONS = setOf(
+            "vgm", "vgz", "nsf", "nsfe", "gbs", "gym", "hes", "ay", "sap", "spc",
+            "kss", "mgs", "bgm", "opx", "mpk", "mbm",
+            "mod", "xm", "s3m", "it", "mptm", "stm", "far", "ult", "med", "mtm",
+            "psm", "amf", "okt", "dsm", "dtm", "umx",
+            "mid", "midi", "rmi", "smf", "mus", "lmp",
+            "psf", "psf1", "psf2", "minipsf", "minipsf1", "minipsf2"
+        )
     }
 
     enum class ShuffleMode { OFF, GAME, ALL }
@@ -69,6 +79,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var allGames: List<Game> = emptyList()
     private var currentGameIdx: Int = -1
     private var currentTrackIdx: Int = -1
+    private var documentGame: Game? = null
+    private var documentQueue: List<DocumentTrack> = emptyList()
+    private var documentQueueIndex = -1
     private var isPlaying = false
     private var isPaused  = false
     private var shouldPlayAfterFocusGain = false
@@ -103,7 +116,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _playbackState = MutableStateFlow<PlaybackInfo>(PlaybackInfo())
     val playbackInfo = _playbackState.asStateFlow()
 
-    // Library ready state - emits when downloads complete
+    // Library ready state - emits after the service has loaded local library state
     private val _libraryReady = MutableStateFlow(false)
     val libraryReady: StateFlow<Boolean> = _libraryReady.asStateFlow()
 
@@ -116,6 +129,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val durationMs: Long = 0L,
         val endlessLoop: Boolean = false
     )
+
+    data class DocumentTrack(val uri: Uri, val displayName: String)
 
     // Position tracking
     private var playbackStartTimeMs = 0L
@@ -134,44 +149,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         VgmEngine.nSetSampleRate(SAMPLE_RATE)
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
-        // Load bundled assets + populate library
+        // Initialize the engine and load local library state. Network access is never used.
         serviceScope.launch {
             VgmEngine.setSampleRate(SAMPLE_RATE) // Use thread-safe version
             extractRoms()
-            loadBundledAssets()
+            VgmEngine.setBassEnabled(SettingsManager.isBassEnabled(applicationContext))
+            VgmEngine.setReverbEnabled(SettingsManager.isReverbEnabled(applicationContext))
             allGames = GameLibrary.getAllGames()
             _libraryReady.value = true
         }
-    }
-
-    private suspend fun loadBundledAssets() = withContext(Dispatchers.IO) {
-        // Auto-download SD Snatcher, Quarth MSX 2, and Bombaman if not present
-        // This runs regardless of whether database is empty (handles stream installs)
-        val autoDownloadUrls = listOf(
-            "https://vgmrips.net/files/Computers/MSX/SD_Snatcher_(MSX2).zip" to "SD Snatcher",
-            "https://vgmrips.net/files/Computers/MSX/Quarth_(MSX2).zip" to "Quarth",
-            "https://vgmrips.net/files/Computers/MSX/Bombaman_Extra_Ammo_(MSX2).zip" to "Bombaman"
-        )
-        for ((url, gameName) in autoDownloadUrls) {
-            // Check if game already exists
-            if (!GameLibrary.gameExists(gameName)) {
-                try {
-                    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-                    conn.setRequestProperty("User-Agent", "Mozilla/5.0")
-                    conn.connectTimeout = 30000
-                    conn.readTimeout = 30000
-                    conn.instanceFollowRedirects = true
-                    if (conn.responseCode in 200..299) {
-                        conn.inputStream.use { input ->
-                            GameLibrary.importZip(input, "$gameName.zip")
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to auto-download $gameName", e)
-                }
-            }
-        }
-        allGames = GameLibrary.getAllGames()
     }
 
     private suspend fun extractRoms() = withContext(Dispatchers.IO) {
@@ -364,6 +350,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val game = allGames[gameIdx]
         if (trackIdx < 0 || trackIdx >= game.tracks.size) return
         val track = game.tracks[trackIdx]
+        documentGame = null
         currentGameIdx  = gameIdx
         currentTrackIdx = trackIdx
         startTrack(game, track)
@@ -413,6 +400,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val opened = VgmEngine.open(track.filePath)
         if (!opened) {
             Log.e(TAG, "Failed to open ${track.filePath}")
+            isPlaying = false
+            isPaused = false
+            updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
+            _playbackState.value = PlaybackInfo()
+            abandonAudioFocus()
+            withContext(Dispatchers.Main) {
+                Toast.makeText(applicationContext, "Unable to play ${track.title}", Toast.LENGTH_LONG).show()
+            }
             return
         }
         
@@ -441,6 +436,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         // Parse tags from VGM file
         val rawTags = VgmEngine.getTags()
         val parsedTags = VgmEngine.parseTags(rawTags)
+
+        // Device volume profiles are global per chip name, not per track.
+        for (i in 0 until VgmEngine.getDeviceCount()) {
+            val chipName = VgmEngine.getDeviceName(i)
+            val current = VgmEngine.getDeviceVolume(i)
+            VgmEngine.setDeviceVolume(i, SettingsManager.getChipVolume(applicationContext, chipName, current))
+        }
         
         // Merge with database track info - use database values as fallback if GD3 tags are empty
         currentTags = VgmTags(
@@ -577,6 +579,21 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private suspend fun onTrackEnded() {
+        if (documentGame != null) {
+            when (loopMode) {
+                LoopMode.TRACK, LoopMode.GAME -> {
+                    val game = documentGame ?: return
+                    startTrack(game, game.tracks.first())
+                }
+                LoopMode.OFF -> if (documentQueueIndex + 1 < documentQueue.size) {
+                    playDocumentAt(documentQueueIndex + 1)
+                } else {
+                    stopPlayback()
+                }
+            }
+            return
+        }
+
         when (loopMode) {
             LoopMode.TRACK -> {
                 // Restart same track
@@ -598,6 +615,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     private fun resumeOrPlay() {
         if (!isPlaying) {
+            documentGame?.let { game ->
+                serviceScope.launch { startTrack(game, game.tracks.first()) }
+                return
+            }
             // Start first track if nothing is loaded
             if (currentGameIdx < 0 && allGames.isNotEmpty()) {
                 serviceScope.launch { loadAndPlay(0, 0) }
@@ -647,6 +668,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     fun nextTrack() {
+        if (documentGame != null) {
+            if (documentQueueIndex + 1 < documentQueue.size) {
+                serviceScope.launch { playDocumentAt(documentQueueIndex + 1) }
+            }
+            return
+        }
         if (!isFadingOut) {
             // Manual skip - maybe smaller fade or immediate?
             // User requested fade out to next track.
@@ -834,6 +861,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     fun previousTrack() {
+        if (documentGame != null) {
+            serviceScope.launch {
+                if (documentQueueIndex > 0) playDocumentAt(documentQueueIndex - 1)
+                else documentGame?.let { startTrack(it, it.tracks.first()) }
+            }
+            return
+        }
         serviceScope.launch {
             allGames = GameLibrary.getAllGames()
             if (allGames.isEmpty()) return@launch
@@ -1062,13 +1096,92 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     // --- Expose state to bound activities ---
-    val currentGame: Game? get() = allGames.getOrNull(currentGameIdx)
+    val currentGame: Game? get() = documentGame ?: allGames.getOrNull(currentGameIdx)
     val currentTrack: TrackEntity? get() = currentGame?.tracks?.getOrNull(currentTrackIdx)
     val playing: Boolean get() = isPlaying && !isPaused
     val paused:  Boolean get() = isPlaying && isPaused
     fun getMediaSession() = mediaSession
     fun getAllLoadedGames() = allGames
     fun refreshGames() { serviceScope.launch { allGames = GameLibrary.getAllGames() } }
+    fun isCurrentTrackDocument(): Boolean = documentGame != null
+    fun getCurrentDocumentTrack(): DocumentTrack? = documentQueue.getOrNull(documentQueueIndex)
+
+    fun isSupportedDocument(displayName: String): Boolean =
+        displayName.substringAfterLast('.', "").lowercase() in DIRECT_PLAY_EXTENSIONS
+
+    fun playDocument(uri: Uri, displayName: String) {
+        playDocumentQueue(listOf(DocumentTrack(uri, displayName)), 0)
+    }
+
+    fun playDocumentQueue(queue: List<DocumentTrack>, startIndex: Int) {
+        val playable = queue.filter { isSupportedDocument(it.displayName) }
+        if (playable.isEmpty()) return
+        documentQueue = playable
+        documentQueueIndex = startIndex.coerceIn(playable.indices)
+        serviceScope.launch { playDocumentAt(documentQueueIndex) }
+    }
+
+    private suspend fun playDocumentAt(index: Int) {
+        val document = documentQueue.getOrNull(index) ?: return
+        val uri = document.uri
+        val displayName = document.displayName
+        val extension = displayName.substringAfterLast('.', "").lowercase()
+        if (extension !in DIRECT_PLAY_EXTENSIONS) return
+
+            val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
+            val safeName = displayName
+                .replace(Regex("[^A-Za-z0-9._ -]"), "_")
+                .takeLast(180)
+                .ifEmpty { "track.$extension" }
+            val destination = File(directPlayDir, "${System.currentTimeMillis()}-$safeName")
+
+            try {
+                withContext(Dispatchers.IO) {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        destination.outputStream().use { output -> input.copyTo(output) }
+                    } ?: throw IOException("Could not open the selected document")
+                }
+            } catch (e: Exception) {
+                destination.delete()
+                Log.e(TAG, "Failed to copy selected document", e)
+                Toast.makeText(applicationContext, "Could not open $displayName", Toast.LENGTH_LONG).show()
+                return
+            }
+
+            val game = Game(
+                entity = org.vlessert.vgmp.library.GameEntity(
+                    id = 0,
+                    name = displayName.substringBeforeLast('.', displayName),
+                    system = "",
+                    author = "",
+                    year = "",
+                    folderPath = directPlayDir.absolutePath,
+                    artPath = "",
+                    zipSource = ""
+                ),
+                tracks = listOf(
+                    TrackEntity(
+                        id = 0,
+                        gameId = 0,
+                        title = displayName.substringBeforeLast('.', displayName),
+                        filePath = destination.absolutePath,
+                        durationSamples = -1,
+                        trackIndex = 0
+                    )
+                )
+            )
+
+            documentGame = game
+            documentQueueIndex = index
+            currentGameIdx = -1
+            currentTrackIdx = 0
+            startTrack(game, game.tracks.first())
+            withContext(Dispatchers.IO) {
+                directPlayDir.listFiles()
+                    ?.filter { it != destination }
+                    ?.forEach { it.delete() }
+            }
+    }
     
     fun updateCurrentTrackFavorite(isFavorite: Boolean) {
         val gameIdx = currentGameIdx

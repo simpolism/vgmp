@@ -41,7 +41,7 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:layout_marginTop="?attr/actionBarSize"
-            android:layout_marginBottom="72dp" />
+            android:layout_marginBottom="136dp" />
 
         <!-- Persistent mini player at the bottom -->
         <include
@@ -49,7 +49,19 @@
             layout="@layout/layout_mini_player"
             android:layout_width="match_parent"
             android:layout_height="72dp"
-            android:layout_gravity="bottom" />
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="64dp" />
+
+        <com.google.android.material.bottomnavigation.BottomNavigationView
+            android:id="@+id/bottom_navigation"
+            android:layout_width="match_parent"
+            android:layout_height="64dp"
+            android:layout_gravity="bottom"
+            android:background="@color/vgmp_surface"
+            app:itemIconTint="@color/vgmp_accent"
+            app:itemTextColor="@color/vgmp_text_primary"
+            app:labelVisibilityMode="labeled"
+            app:menu="@menu/menu_bottom_navigation" />
 
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
 

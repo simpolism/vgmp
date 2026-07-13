@@ -114,17 +114,7 @@ dependencies {
     implementation(libs.fragment.ktx)
 
     // Media / Playback
-    implementation(libs.androidx.media3.session)
-    implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media)
-
-    // Image loading
-    implementation(libs.glide)
-    implementation(libs.androidx.work.runtime.ktx)
-    kapt(libs.glide.compiler)
-
-    // Background work / downloads
-    implementation(libs.androidx.work.runtime.ktx)
 
     // Room (game library database)
     implementation(libs.room.runtime)

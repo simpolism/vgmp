@@ -4,7 +4,7 @@
     android:id="@+id/content_scroll"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#E61a1a1a">
+    android:background="@color/vgmp_background">
 
         <LinearLayout
             android:id="@+id/content_container"
@@ -12,14 +12,6 @@
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:padding="16dp">
-
-            <!-- Drag handle -->
-            <View
-                android:layout_width="40dp"
-                android:layout_height="4dp"
-                android:layout_gravity="center_horizontal"
-                android:layout_marginBottom="16dp"
-                android:background="@color/vgmp_text_secondary" />
 
             <!-- Album art -->
             <ImageView

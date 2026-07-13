@@ -4,10 +4,8 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.SeekBar
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
-import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentSettingsBinding
 import org.vlessert.vgmp.engine.VgmEngine
@@ -43,9 +41,6 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
             SettingsManager.ANALYZER_STYLE_BARS -> binding.radioBars.isChecked = true
             else -> binding.radioKaleidoscope.isChecked = true
         }
-        val timeout = SettingsManager.getFadeTimeout(context)
-        binding.seekbarFadeTimeout.progress = timeout
-        binding.tvFadeTimeoutValue.text = "${timeout}s"
     }
 
     private fun setupListeners() {
@@ -68,18 +63,9 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
                 else SettingsManager.ANALYZER_STYLE_KALEIDOSCOPE
             )
         }
-        binding.seekbarFadeTimeout.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                binding.tvFadeTimeoutValue.text = "${progress}s"
-                if (fromUser) SettingsManager.setFadeTimeout(context, progress)
-            }
-            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-        })
     }
 
     override fun onDestroyView() {
-        (activity as? MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

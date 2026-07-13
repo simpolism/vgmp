@@ -42,6 +42,7 @@ class BrowserFragment : Fragment() {
     private lateinit var adapter: EntryAdapter
     private var rootUri: Uri? = null
     private var currentUri: Uri? = null
+    private var loadGeneration = 0
 
     private val chooseFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri ?: return@registerForActivityResult
@@ -85,6 +86,7 @@ class BrowserFragment : Fragment() {
 
     private fun loadDirectory() {
         val directory = currentUri
+        val generation = ++loadGeneration
         binding.btnUp.isEnabled = directory != null && directory != rootUri
         if (directory == null) {
             binding.tvPath.text = "Browse"
@@ -93,12 +95,17 @@ class BrowserFragment : Fragment() {
             adapter.notifyDataSetChanged()
             return
         }
+        entries.clear()
+        adapter.notifyDataSetChanged()
+        binding.recyclerEntries.visibility = View.GONE
         binding.progress.visibility = View.VISIBLE
         binding.tvEmpty.visibility = View.GONE
         viewLifecycleOwner.lifecycleScope.launch {
             val loaded = withContext(Dispatchers.IO) { runCatching { queryChildren(directory) } }
+            if (generation != loadGeneration) return@launch
             if (loaded.isFailure) {
                 binding.progress.visibility = View.GONE
+                binding.recyclerEntries.visibility = View.VISIBLE
                 Toast.makeText(requireContext(), "This folder is no longer available", Toast.LENGTH_LONG).show()
                 return@launch
             }
@@ -106,6 +113,7 @@ class BrowserFragment : Fragment() {
             entries.addAll(loaded.getOrThrow())
             adapter.notifyDataSetChanged()
             binding.progress.visibility = View.GONE
+            binding.recyclerEntries.visibility = View.VISIBLE
             binding.tvPath.text = directory.lastPathSegment?.substringAfterLast(':')?.ifEmpty { "Music" } ?: "Music"
             binding.tvEmpty.text = "This folder is empty"
             binding.tvEmpty.visibility = if (entries.isEmpty()) View.VISIBLE else View.GONE
@@ -205,6 +213,10 @@ class BrowserFragment : Fragment() {
         class Holder(val text: TextView) : RecyclerView.ViewHolder(text)
         override fun onCreateViewHolder(parent: ViewGroup, type: Int): Holder {
             val text = TextView(parent.context).apply {
+                layoutParams = RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
                 setPadding(20, 24, 20, 24)
                 textSize = 16f
                 setTextColor(context.getColor(org.vlessert.vgmp.R.color.vgmp_text_primary))

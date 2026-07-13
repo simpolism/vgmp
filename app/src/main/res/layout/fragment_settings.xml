@@ -62,7 +62,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Spectrum Analyzer"
+                android:text="Fullscreen Visualizer"
                 android:textColor="@color/vgmp_accent"
                 android:textSize="14sp"
                 android:textStyle="bold"
@@ -80,7 +80,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Enable Kaleidoscope"
+                    android:text="Enable fullscreen visualizer"
                     android:textColor="@color/vgmp_text_primary"
                     android:textSize="16sp" />
 
@@ -126,55 +126,6 @@
                     android:textColor="@color/vgmp_text_primary" />
             </RadioGroup>
 
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:layout_marginTop="16dp"
-                android:background="@color/vgmp_divider" />
-
-            <!-- Fade Timeout -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="Auto-hide timeout (seconds)"
-                android:textColor="@color/vgmp_text_primary"
-                android:textSize="16sp" />
-
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Player hides after inactivity, showing kaleidoscope"
-                android:textColor="@color/vgmp_text_secondary"
-                android:textSize="12sp"
-                android:layout_marginTop="4dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="8dp">
-
-                <SeekBar
-                    android:id="@+id/seekbar_fade_timeout"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:max="60"
-                    android:progressTint="@color/vgmp_accent"
-                    android:thumbTint="@color/vgmp_accent" />
-
-                <TextView
-                    android:id="@+id/tv_fade_timeout_value"
-                    android:layout_width="50dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
-                    android:text="10s"
-                    android:textColor="@color/vgmp_text_secondary"
-                    android:textSize="14sp"
-                    android:gravity="end" />
-            </LinearLayout>
 
         </LinearLayout>
     </ScrollView>

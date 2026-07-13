@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.TextUtils
 import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.View
@@ -39,6 +40,8 @@ class NowPlayingFragment : Fragment() {
     // Playback speed options: 100%, 75%, 50%, 25%
     private val speedOptions = doubleArrayOf(1.0, 0.75, 0.5, 0.25)
     private var currentSpeedIndex = 0
+    private var notesExpanded = false
+    private var notesTrackKey: String? = null
     
     // Soloed channels tracking
     private val soloedChannels = mutableSetOf<Int>()
@@ -151,6 +154,13 @@ class NowPlayingFragment : Fragment() {
     }
 
     private fun setupButtons() {
+        binding.ivArt.setOnClickListener {
+            (activity as? org.vlessert.vgmp.MainActivity)?.showAnalyzer()
+        }
+        binding.tvNotes.setOnClickListener {
+            notesExpanded = !notesExpanded
+            applyNotesExpansion()
+        }
         binding.btnPrev.setOnClickListener { service?.previousTrack() }
         binding.btnPlayPause.setOnClickListener {
             service?.let { svc ->
@@ -260,6 +270,12 @@ class NowPlayingFragment : Fragment() {
             binding.ivArt.setImageResource(R.drawable.vgmp_logo)
             return
         }
+        val trackKey = "${track.uri}#${track.subtrackIndex}"
+        if (trackKey != notesTrackKey) {
+            notesTrackKey = trackKey
+            notesExpanded = false
+            applyNotesExpansion()
+        }
 
         binding.ivArt.setImageResource(R.drawable.vgmp_logo)
 
@@ -322,6 +338,7 @@ class NowPlayingFragment : Fragment() {
                     colorSpan(tags.notes, requireContext().getColor(R.color.vgmp_text_primary))
                 }
                 binding.tvNotes.visibility = View.VISIBLE
+                binding.tvNotes.contentDescription = if (notesExpanded) "Collapse notes" else "Expand notes"
             } else {
                 binding.tvNotes.visibility = View.GONE
             }
@@ -332,6 +349,13 @@ class NowPlayingFragment : Fragment() {
         
         updatePlayPauseButton()
         updateModeButtons()
+    }
+
+    private fun applyNotesExpansion() {
+        val binding = _binding ?: return
+        binding.tvNotes.maxLines = if (notesExpanded) Int.MAX_VALUE else 3
+        binding.tvNotes.ellipsize = if (notesExpanded) null else TextUtils.TruncateAt.END
+        binding.tvNotes.contentDescription = if (notesExpanded) "Collapse notes" else "Expand notes"
     }
 
     private fun updateModeButtons() {
@@ -691,7 +715,6 @@ class NowPlayingFragment : Fragment() {
 
     override fun onDestroyView() {
         handler.removeCallbacksAndMessages(null)
-        (activity as? org.vlessert.vgmp.MainActivity)?.resetAutoHideTimer()
         super.onDestroyView()
         _binding = null
     }

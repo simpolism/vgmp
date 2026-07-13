@@ -7,9 +7,7 @@ import android.content.IntentFilter
 import android.content.ComponentName
 import android.content.ServiceConnection
 import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.view.Menu
 import android.view.MenuItem
 import android.view.MotionEvent
@@ -51,11 +49,6 @@ class MainActivity : AppCompatActivity() {
     private var currentTabId = R.id.nav_browse
     private var navigationInsetBottom = 0
     
-    // Auto-hide for main screen
-    private var lastInteractionTime = System.currentTimeMillis()
-    private val autoHideHandler = Handler(Looper.getMainLooper())
-    private var autoHideRunnable: Runnable? = null
-
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as? VgmServiceBinder ?: return
@@ -137,9 +130,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Setup auto-hide for main screen
-        setupMainAutoHide()
-
         // Navigate up within the selected tree before backgrounding the app.
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -184,48 +174,6 @@ class MainActivity : AppCompatActivity() {
         ViewCompat.requestApplyInsets(binding.root)
     }
     
-    private fun setupMainAutoHide() {
-        // Track touches on main content
-        binding.mainContent.setOnTouchListener { _, event ->
-            if (event.action == MotionEvent.ACTION_DOWN) {
-                lastInteractionTime = System.currentTimeMillis()
-                if (isAnalyzerVisible) {
-                    hideAnalyzer()
-                }
-            }
-            false
-        }
-        binding.mainContent.isClickable = true
-        
-        // Start auto-hide check
-        autoHideRunnable = object : Runnable {
-            override fun run() {
-                val timeout = SettingsManager.getFadeTimeout(this@MainActivity) * 1000L
-                val isPlayerOpen = currentTabId == R.id.nav_player
-                val isSettingsOpen = supportFragmentManager.findFragmentByTag("settings")?.isVisible == true
-                val isPlaying = playbackService?.playing == true
-                
-                // Only trigger kaleidoscope if:
-                // - Timeout is set (> 0)
-                // - Kaleidoscope not already visible
-                // - No dialogs are open (player or settings)
-                // - Music is actually playing
-                // - Inactivity timeout reached
-                val anyDialogOpen = isPlayerOpen || isSettingsOpen
-                if (timeout > 0 && !isAnalyzerVisible && !anyDialogOpen && isPlaying && System.currentTimeMillis() - lastInteractionTime >= timeout) {
-                    showAnalyzer()
-                }
-                autoHideHandler.postDelayed(this, 1000)
-            }
-        }
-        autoHideHandler.postDelayed(autoHideRunnable!!, 1000)
-    }
-    
-    override fun onUserInteraction() {
-        super.onUserInteraction()
-        lastInteractionTime = System.currentTimeMillis()
-    }
-    
     private fun startSpectrumObserver() {
         val svc = playbackService ?: return
         lifecycleScope.launch {
@@ -247,7 +195,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun showAnalyzer() {
+    fun showAnalyzer() {
         // Only show if enabled and music is playing
         if (!SettingsManager.isAnalyzerEnabled(this)) return
         if (playbackService?.playing != true) return
@@ -282,7 +230,6 @@ class MainActivity : AppCompatActivity() {
         // Restore system UI
         showSystemUI()
         
-        lastInteractionTime = System.currentTimeMillis()
         binding.mainContent.visibility = View.VISIBLE
         binding.mainContent.alpha = 0f
         binding.mainContent.animate()
@@ -331,10 +278,6 @@ class MainActivity : AppCompatActivity() {
     
     fun isKaleidoscopeShowing() = isAnalyzerVisible
     
-    fun resetAutoHideTimer() {
-        lastInteractionTime = System.currentTimeMillis()
-    }
-
     private fun requestPermissionsIfNeeded() {
         val perms = mutableListOf<String>()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

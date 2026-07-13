@@ -36,7 +36,6 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         val context = requireContext()
         binding.switchBassEnabled.isChecked = SettingsManager.isBassEnabled(context)
         binding.switchReverbEnabled.isChecked = SettingsManager.isReverbEnabled(context)
-        binding.switchAnalyzerEnabled.isChecked = SettingsManager.isAnalyzerEnabled(context)
         when (SettingsManager.getAnalyzerStyle(context)) {
             SettingsManager.ANALYZER_STYLE_BARS -> binding.radioBars.isChecked = true
             else -> binding.radioKaleidoscope.isChecked = true
@@ -52,9 +51,6 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         binding.switchReverbEnabled.setOnCheckedChangeListener { _, enabled ->
             SettingsManager.setReverbEnabled(context, enabled)
             lifecycleScope.launch { VgmEngine.setReverbEnabled(enabled) }
-        }
-        binding.switchAnalyzerEnabled.setOnCheckedChangeListener { _, enabled ->
-            SettingsManager.setAnalyzerEnabled(context, enabled)
         }
         binding.radioAnalyzerStyle.setOnCheckedChangeListener { _, checkedId ->
             SettingsManager.setAnalyzerStyle(

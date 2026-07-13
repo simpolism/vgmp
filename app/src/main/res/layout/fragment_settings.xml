@@ -67,41 +67,10 @@
                 android:textSize="14sp"
                 android:textStyle="bold"
                 android:layout_marginBottom="8dp" />
-
-            <!-- Enable Analyzer -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:paddingVertical="12dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Enable fullscreen visualizer"
-                    android:textColor="@color/vgmp_text_primary"
-                    android:textSize="16sp" />
-
-                <androidx.appcompat.widget.SwitchCompat
-                    android:id="@+id/switch_analyzer_enabled"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:tint="@color/vgmp_accent" />
-            </LinearLayout>
-
-            <View
-                android:layout_width="match_parent"
-                android:layout_height="1dp"
-                android:background="@color/vgmp_divider" />
-
-            <!-- Analyzer Style -->
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:text="Analyzer Style"
+                android:text="Visualizer style"
                 android:textColor="@color/vgmp_text_primary"
                 android:textSize="16sp" />
 

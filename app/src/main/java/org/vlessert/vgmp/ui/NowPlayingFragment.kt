@@ -157,6 +157,9 @@ class NowPlayingFragment : Fragment() {
         binding.ivArt.setOnClickListener {
             (activity as? org.vlessert.vgmp.MainActivity)?.showAnalyzer()
         }
+        binding.btnVisualizer.setOnClickListener {
+            (activity as? org.vlessert.vgmp.MainActivity)?.showAnalyzer()
+        }
         binding.tvNotes.setOnClickListener {
             notesExpanded = !notesExpanded
             applyNotesExpansion()
@@ -681,6 +684,7 @@ class NowPlayingFragment : Fragment() {
         binding.btnPlayPause.setImageResource(
             if (playing) R.drawable.ic_pause else R.drawable.ic_play
         )
+        binding.btnVisualizer.isEnabled = playing
     }
 
     private fun startPositionUpdater() {

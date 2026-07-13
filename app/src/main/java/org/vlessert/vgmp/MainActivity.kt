@@ -196,8 +196,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     fun showAnalyzer() {
-        // Only show if enabled and music is playing
-        if (!SettingsManager.isAnalyzerEnabled(this)) return
+        // Fullscreen visualizers are opened explicitly from the player.
         if (playbackService?.playing != true) return
         
         isAnalyzerVisible = true

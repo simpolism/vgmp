@@ -5,7 +5,6 @@ import android.content.SharedPreferences
 
 object SettingsManager {
     private const val PREFS_NAME = "vgmp_settings"
-    private const val KEY_ANALYZER_ENABLED = "analyzer_enabled"
     private const val KEY_ANALYZER_STYLE = "analyzer_style"
     private const val KEY_BASS_ENABLED = "bass_enabled"
     private const val KEY_REVERB_ENABLED = "reverb_enabled"
@@ -16,14 +15,6 @@ object SettingsManager {
 
     private fun getPrefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    }
-    
-    fun isAnalyzerEnabled(context: Context): Boolean {
-        return getPrefs(context).getBoolean(KEY_ANALYZER_ENABLED, true)
-    }
-    
-    fun setAnalyzerEnabled(context: Context, enabled: Boolean) {
-        getPrefs(context).edit().putBoolean(KEY_ANALYZER_ENABLED, enabled).apply()
     }
     
     fun getAnalyzerStyle(context: Context): String {

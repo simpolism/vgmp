@@ -6,6 +6,7 @@ VGMP is a fully offline Android player for video game music. It browses files th
 
 - Folder-first browsing with persistent access to a selected music tree
 - Virtual ZIP browsing that extracts only the selected track for playback
+- Offline album art from track images and conventional folder/ZIP cover files
 - Named playlists without duplicating audio files
 - VGM/VGZ, GME, KSS/MSX, tracker, MIDI, Doom MUS/LMP, and PSF playback
 - Per-chip volume profiles plus channel mute and solo controls

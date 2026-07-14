@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.databinding.FragmentBrowserBinding
+import org.vlessert.vgmp.playback.ArtworkRef
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.playback.TrackRef
@@ -161,6 +162,7 @@ class BrowserFragment : Fragment() {
             DocumentsContract.Document.COLUMN_MIME_TYPE
         )
         val result = mutableListOf<Entry>()
+        val artwork = mutableListOf<Pair<String, Uri>>()
         requireContext().contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
                 val id = cursor.getString(0)
@@ -168,6 +170,7 @@ class BrowserFragment : Fragment() {
                 val mime = cursor.getString(2)
                 val isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR
                 val uri = DocumentsContract.buildDocumentUriUsingTree(directory, id)
+                if (!isDirectory && isArtwork(name)) artwork += name to uri
                 val browseZip = !isDirectory && name.endsWith(".zip", ignoreCase = true) &&
                     SettingsManager.isZipBrowsingEnabled(requireContext())
                 val track = if (!isDirectory && SupportedFormats.supports(name)) TrackRef(uri, name) else null
@@ -185,13 +188,29 @@ class BrowserFragment : Fragment() {
                 )
             }
         }
-        return result.sortedWith(compareBy<Entry> { !it.directory }.thenBy { it.name.lowercase() })
+        val artworkNames = artwork.map { it.first }
+        return result.map { entry ->
+            val track = entry.track ?: return@map entry
+            val selected = selectArtwork(track.displayName, artworkNames)
+                ?.let { name -> artwork.first { it.first == name }.second }
+            entry.copy(track = track.copy(artwork = selected?.let { ArtworkRef(it) }))
+        }.sortedWith(compareBy<Entry> { !it.directory }.thenBy { it.name.lowercase() })
     }
 
-    private fun queryZip(location: Location.Zip): List<Entry> =
-        ZipArchiveStore(requireContext()).list(location.archiveUri, location.path).map { item ->
+    private fun queryZip(location: Location.Zip): List<Entry> {
+        val items = ZipArchiveStore(requireContext()).list(location.archiveUri, location.path)
+        val artwork = items.filter { !it.directory && isArtwork(it.displayName) }
+        val artworkNames = artwork.map { it.displayName }
+        return items.map { item ->
+            val artworkEntry = selectArtwork(item.displayName, artworkNames)
+                ?.let { name -> artwork.first { it.displayName == name }.path }
             val track = if (!item.directory && SupportedFormats.supports(item.displayName)) {
-                TrackRef(location.archiveUri, item.displayName, archiveEntry = item.path)
+                TrackRef(
+                    location.archiveUri,
+                    item.displayName,
+                    archiveEntry = item.path,
+                    artwork = artworkEntry?.let { ArtworkRef(location.archiveUri, it) }
+                )
             } else null
             Entry(
                 uri = location.archiveUri,
@@ -202,6 +221,7 @@ class BrowserFragment : Fragment() {
                 track = track
             )
         }
+    }
 
     private fun persistedParent(): Uri? {
         val current = (currentLocation as? Location.Document)?.uri ?: return null
@@ -248,7 +268,7 @@ class BrowserFragment : Fragment() {
             else {
                 PlaylistStore.addTrack(
                     requireContext(), playlists[index].id,
-                    PlaylistTrack(track.uri, track.displayName, track.archiveEntry)
+                    PlaylistTrack.from(track)
                 )
                 Toast.makeText(requireContext(), "Added to ${playlists[index].name}", Toast.LENGTH_SHORT).show()
             }
@@ -265,7 +285,7 @@ class BrowserFragment : Fragment() {
                     val playlist = PlaylistStore.create(requireContext(), name)
                     PlaylistStore.addTrack(
                         requireContext(), playlist.id,
-                        PlaylistTrack(track.uri, track.displayName, track.archiveEntry)
+                        PlaylistTrack.from(track)
                     )
                 }
             }.setNegativeButton("Cancel", null).show()
@@ -311,6 +331,27 @@ class BrowserFragment : Fragment() {
         private const val KEY_CURRENT = "current_uri"
         fun newInstance() = BrowserFragment()
     }
+}
+
+private val ARTWORK_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
+private val ARTWORK_NAMES = listOf("cover", "folder", "front", "album", "artwork")
+
+private fun isArtwork(name: String): Boolean =
+    name.substringAfterLast('.', "").lowercase() in ARTWORK_EXTENSIONS
+
+/** Prefer track-specific art, then conventional cover names, then the first local image. */
+internal fun selectArtwork(trackName: String, imageNames: List<String>): String? {
+    val trackBase = trackName.substringBeforeLast('.', trackName).lowercase()
+    return imageNames.minWithOrNull(
+        compareBy<String> { name ->
+            val base = name.substringBeforeLast('.', name).lowercase()
+            when {
+                base == trackBase -> 0
+                base in ARTWORK_NAMES -> 1 + ARTWORK_NAMES.indexOf(base)
+                else -> 100
+            }
+        }.thenBy { it.lowercase() }
+    )
 }
 
 internal fun parentDocumentId(rootId: String, currentId: String): String {

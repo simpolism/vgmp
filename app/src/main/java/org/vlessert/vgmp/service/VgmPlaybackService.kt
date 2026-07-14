@@ -35,6 +35,7 @@ import org.vlessert.vgmp.R
 import org.vlessert.vgmp.VgmServiceBinder
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.engine.VgmTags
+import org.vlessert.vgmp.playback.ArtworkLoader
 import org.vlessert.vgmp.playback.PlaybackQueue
 import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.playback.TrackRef
@@ -94,6 +95,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _spectrum = MutableStateFlow(FloatArray(512))
     val spectrum: StateFlow<FloatArray> = _spectrum.asStateFlow()
     private val spectrumBuffer = FloatArray(512)
+    private val _artwork = MutableStateFlow<Bitmap?>(null)
+    val artwork: StateFlow<Bitmap?> = _artwork.asStateFlow()
+    private var metadataArtwork: Bitmap? = null
     
     // Channel spectrums thread
     private val _channelSpectrums = MutableStateFlow<FloatArray?>(null)
@@ -208,7 +212,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             val playlist = PlaylistStore.getAll(applicationContext).firstOrNull { it.id == parts[1] } ?: return
             val index = parts[2].toIntOrNull() ?: return
             playQueue(
-                playlist.tracks.map { TrackRef(it.uri, it.displayName, archiveEntry = it.archiveEntry) },
+                playlist.tracks.map { it.toTrackRef() },
                 index
             )
         }
@@ -337,9 +341,19 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     fun playDocument(uri: Uri, displayName: String) = playQueue(listOf(TrackRef(uri, displayName)))
 
-    private suspend fun startCurrentTrack() {
-        val track = queue.current ?: return
-        val path = materialize(track) ?: return
+    private suspend fun startCurrentTrack() = coroutineScope {
+        val track = queue.current ?: return@coroutineScope
+        _artwork.value = null
+        metadataArtwork = null
+        val artworkLoad = async(Dispatchers.IO) {
+            track.artwork?.let { ArtworkLoader.load(applicationContext, it) }
+        }
+        val path = materialize(track) ?: run {
+            artworkLoad.cancel()
+            return@coroutineScope
+        }
+        _artwork.value = artworkLoad.await()
+        metadataArtwork = _artwork.value?.let(::scaledMetadataArtwork)
         currentLocalPath = path
         startTrack(track, path)
     }
@@ -472,7 +486,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             creator = parsedTags.creator,
             notes = parsedTags.notes
         )
-        
+
         val liveDurationSamples = VgmEngine.getTotalSamples()
         trackDurationMs = if (liveDurationSamples > 0) liveDurationSamples * 1000L / SAMPLE_RATE else 0L
 
@@ -645,6 +659,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         audioTrack = null
         updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
         abandonAudioFocus()
+        _artwork.value = null
+        metadataArtwork = null
         _playbackState.value = PlaybackInfo()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -895,8 +911,24 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (queue.index + 1).toLong())
             .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, queue.size.toLong())
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, if (endlessLoopMode) 0L else trackDurationMs)
-        getFallbackArt()?.let { metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
+        (metadataArtwork ?: getFallbackArt())?.let {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, it)
+        }
         mediaSession.setMetadata(metaBuilder.build())
+    }
+
+    private fun scaledMetadataArtwork(source: Bitmap): Bitmap {
+        val maxDimension = 384
+        val largest = maxOf(source.width, source.height)
+        if (largest <= maxDimension) return source
+        val scale = maxDimension.toFloat() / largest
+        return Bitmap.createScaledBitmap(
+            source,
+            (source.width * scale).toInt().coerceAtLeast(1),
+            (source.height * scale).toInt().coerceAtLeast(1),
+            true
+        )
     }
     fun getEndlessLoop(): Boolean = endlessLoopMode
     

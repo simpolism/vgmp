@@ -4,9 +4,34 @@ import android.content.Context
 import android.net.Uri
 import org.json.JSONArray
 import org.json.JSONObject
+import org.vlessert.vgmp.playback.ArtworkRef
+import org.vlessert.vgmp.playback.TrackRef
 import java.util.UUID
 
-data class PlaylistTrack(val uri: Uri, val displayName: String, val archiveEntry: String? = null)
+data class PlaylistTrack(
+    val uri: Uri,
+    val displayName: String,
+    val archiveEntry: String? = null,
+    val artworkUri: Uri? = null,
+    val artworkArchiveEntry: String? = null
+) {
+    fun toTrackRef() = TrackRef(
+        uri,
+        displayName,
+        archiveEntry = archiveEntry,
+        artwork = artworkUri?.let { ArtworkRef(it, artworkArchiveEntry) }
+    )
+
+    companion object {
+        fun from(track: TrackRef) = PlaylistTrack(
+            track.uri,
+            track.displayName,
+            track.archiveEntry,
+            track.artwork?.uri,
+            track.artwork?.archiveEntry
+        )
+    }
+}
 data class Playlist(val id: String, val name: String, val tracks: List<PlaylistTrack>)
 
 object PlaylistStore {
@@ -28,7 +53,9 @@ object PlaylistStore {
                         PlaylistTrack(
                             Uri.parse(track.getString("uri")),
                             track.getString("name"),
-                            track.optString("archiveEntry").takeIf { it.isNotEmpty() }
+                            track.optString("archiveEntry").takeIf { it.isNotEmpty() },
+                            track.optString("artworkUri").takeIf { it.isNotEmpty() }?.let(Uri::parse),
+                            track.optString("artworkArchiveEntry").takeIf { it.isNotEmpty() }
                         )
                     }
                 )
@@ -75,6 +102,8 @@ object PlaylistStore {
                         .put("uri", track.uri.toString())
                         .put("name", track.displayName)
                         .put("archiveEntry", track.archiveEntry ?: "")
+                        .put("artworkUri", track.artworkUri?.toString() ?: "")
+                        .put("artworkArchiveEntry", track.artworkArchiveEntry ?: "")
                 )
             }
             json.put(JSONObject().put("id", playlist.id).put("name", playlist.name).put("tracks", tracks))

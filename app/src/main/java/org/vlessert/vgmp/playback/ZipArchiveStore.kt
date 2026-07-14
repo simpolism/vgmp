@@ -3,6 +3,7 @@ package org.vlessert.vgmp.playback
 import android.content.Context
 import android.net.Uri
 import java.io.File
+import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.zip.ZipFile
@@ -15,6 +16,13 @@ class ZipArchiveStore(private val context: Context) {
     fun copyEntry(uri: Uri, entryPath: String, output: OutputStream) {
         copyArchiveEntry(localArchive(uri), entryPath, output)
     }
+
+    fun <T> withEntryInputStream(uri: Uri, entryPath: String, block: (InputStream) -> T): T =
+        ZipFile(localArchive(uri)).use { zip ->
+            val entry = findEntry(zip, entryPath)
+            require(!entry.isDirectory) { "Cannot open a ZIP directory" }
+            zip.getInputStream(entry).use(block)
+        }
 
     private fun localArchive(uri: Uri): File {
         val dir = File(context.cacheDir, "zip-archives").also { it.mkdirs() }
@@ -61,15 +69,19 @@ class ZipArchiveStore(private val context: Context) {
         }
 
         internal fun copyArchiveEntry(archive: File, entryPath: String, output: OutputStream) {
-            val requested = normalized(entryPath) ?: error("Invalid ZIP entry")
             ZipFile(archive).use { zip ->
-                val entry = zip.getEntry(requested) ?: zip.entries().asSequence()
-                    .firstOrNull { normalized(it.name) == requested }
-                    ?: error("ZIP entry no longer exists")
+                val entry = findEntry(zip, entryPath)
                 require(!entry.isDirectory) { "Cannot play a ZIP directory" }
                 zip.getInputStream(entry).use { it.copyTo(output) }
             }
         }
+
+        private fun findEntry(zip: ZipFile, entryPath: String) =
+            (normalized(entryPath) ?: error("Invalid ZIP entry")).let { requested ->
+                zip.getEntry(requested) ?: zip.entries().asSequence()
+                    .firstOrNull { normalized(it.name) == requested }
+                    ?: error("ZIP entry no longer exists")
+            }
 
         private fun normalized(path: String): String? {
             val clean = path.replace('\\', '/').trimStart('/').trimEnd('/')

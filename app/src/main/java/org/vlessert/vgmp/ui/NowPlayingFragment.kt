@@ -273,14 +273,15 @@ class NowPlayingFragment : Fragment() {
             binding.ivArt.setImageResource(R.drawable.vgmp_logo)
             return
         }
-        val trackKey = "${track.uri}#${track.subtrackIndex}"
+        val trackKey = "${track.uri}#${track.archiveEntry}#${track.subtrackIndex}"
         if (trackKey != notesTrackKey) {
             notesTrackKey = trackKey
             notesExpanded = false
             applyNotesExpansion()
         }
 
-        binding.ivArt.setImageResource(R.drawable.vgmp_logo)
+        svc.artwork.value?.let(binding.ivArt::setImageBitmap)
+            ?: binding.ivArt.setImageResource(R.drawable.vgmp_logo)
 
         // Duration is now updated via observePlaybackInfo() using live duration from engine
         
@@ -423,7 +424,7 @@ class NowPlayingFragment : Fragment() {
             if (index < playlists.size) {
                 PlaylistStore.addTrack(
                     requireContext(), playlists[index].id,
-                    PlaylistTrack(document.uri, document.displayName, document.archiveEntry)
+                    PlaylistTrack.from(document)
                 )
                 showStyledToast("Added to ${playlists[index].name}")
             } else {
@@ -435,7 +436,7 @@ class NowPlayingFragment : Fragment() {
                             val playlist = PlaylistStore.create(requireContext(), name)
                             PlaylistStore.addTrack(
                                 requireContext(), playlist.id,
-                                PlaylistTrack(document.uri, document.displayName, document.archiveEntry)
+                                PlaylistTrack.from(document)
                             )
                         }
                     }.setNegativeButton("Cancel", null).show()

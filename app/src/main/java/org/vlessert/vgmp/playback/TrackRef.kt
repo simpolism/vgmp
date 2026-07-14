@@ -7,7 +7,8 @@ data class TrackRef(
     val uri: Uri,
     val displayName: String,
     val subtrackIndex: Int = -1,
-    val archiveEntry: String? = null
+    val archiveEntry: String? = null,
+    val artwork: ArtworkRef? = null
 ) {
     val title: String get() = displayName.substringBeforeLast('.', displayName)
 }

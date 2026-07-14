@@ -76,7 +76,7 @@ class PlaylistsFragment : Fragment() {
     }
 
     private fun playPlaylist(playlist: Playlist, index: Int) {
-        val queue = playlist.tracks.map { TrackRef(it.uri, it.displayName, archiveEntry = it.archiveEntry) }
+        val queue = playlist.tracks.map(PlaylistTrack::toTrackRef)
         (activity as? MainActivity)?.getService()?.playQueue(queue, index)
         (activity as? MainActivity)?.selectPlayerTab()
     }

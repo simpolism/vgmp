@@ -341,7 +341,8 @@ class MainActivity : AppCompatActivity() {
         binding.miniPlayer.btnMiniPlayPause.setImageResource(
             if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play
         )
-        binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
+        svc.artwork.value?.let(binding.miniPlayer.ivMiniArt::setImageBitmap)
+            ?: binding.miniPlayer.ivMiniArt.setImageResource(R.drawable.vgmp_logo)
     }
 
     fun getService() = playbackService

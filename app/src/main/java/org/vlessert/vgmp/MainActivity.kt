@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
             }
             supportFragmentManager.fragments.filterIsInstance<NowPlayingFragment>()
                 .forEach { it.onServiceConnected(playbackService!!) }
+            svc.setVisualizerActive(isAnalyzerVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
             
             // Start observing spectrum for kaleidoscope
             startSpectrumObserver()
@@ -208,6 +209,7 @@ class MainActivity : AppCompatActivity() {
         if (playbackService?.currentTrack == null) return
         
         isAnalyzerVisible = true
+        playbackService?.setVisualizerActive(true)
         
         // Hide system UI for true fullscreen
         hideSystemUI()
@@ -233,6 +235,7 @@ class MainActivity : AppCompatActivity() {
     private fun hideAnalyzer() {
         if (!isAnalyzerVisible) return
         isAnalyzerVisible = false
+        playbackService?.setVisualizerActive(false)
         
         // Restore system UI
         showSystemUI()
@@ -354,6 +357,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun getService() = playbackService
+
+    override fun onStart() {
+        super.onStart()
+        if (isAnalyzerVisible) playbackService?.setVisualizerActive(true)
+    }
+
+    override fun onStop() {
+        playbackService?.setVisualizerActive(false)
+        super.onStop()
+    }
     
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)

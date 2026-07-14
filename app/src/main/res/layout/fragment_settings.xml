@@ -151,7 +151,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:max="105"
+                    android:max="225"
                     android:progressTint="@color/vgmp_accent"
                     android:thumbTint="@color/vgmp_accent" />
                 <TextView

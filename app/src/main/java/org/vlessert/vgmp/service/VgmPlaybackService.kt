@@ -56,10 +56,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val NOTIF_CHANNEL_ID = "vgmp_playback"
         const val NOTIF_ID = 1
         const val SAMPLE_RATE = 44100
-        // Small render chunks provide fresh analyzer data quickly enough for 120 Hz displays.
-        // AudioTrack still uses its device-sized internal buffer, so playback is not limited to
-        // this individual write size.
-        const val BUFFER_FRAMES = 256
+        // 128-frame hops provide fresh FFT input for analyzer rates up to 240 Hz.
+        // AudioTrack uses a deeper device buffer below to isolate playback from UI/FFT jitter.
+        const val BUFFER_FRAMES = 128
         const val ACTION_PLAY   = "org.vlessert.vgmp.ACTION_PLAY"
         const val ACTION_PAUSE  = "org.vlessert.vgmp.ACTION_PAUSE"
         const val ACTION_NEXT   = "org.vlessert.vgmp.ACTION_NEXT"
@@ -108,6 +107,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
     
     private var lastSpectrumUpdateNs = 0L
+    private var lastChannelSpectrumUpdateNs = 0L
+    @Volatile private var visualizerActive = false
+    @Volatile private var visualizerFps = 42
+    private var lastUnderrunCount = 0
 
     private var renderJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
@@ -318,7 +321,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             AudioFormat.CHANNEL_OUT_STEREO,
             AudioFormat.ENCODING_PCM_16BIT
         )
-        val bufSize = maxOf(minBuf, BUFFER_FRAMES * 2 * 2) // frames * channels * bytes/sample
+        // Favor glitch resistance over minimum latency for a music player. This gives the render
+        // thread headroom when an emulator or FFT frame occasionally takes longer than usual.
+        val bufSize = maxOf(minBuf * 4, BUFFER_FRAMES * 2 * 2)
         return AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -508,6 +513,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
         audioTrack?.release()
         audioTrack = createAudioTrack().also { it.play() }
+        lastUnderrunCount = 0
 
         startRenderJob()
         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
@@ -532,11 +538,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         applyVolumeAndFade(renderBuffer, framesWritten)
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
 
-                        // Update spectrum for UI
+                        // Fullscreen FFT work is demand-driven; normal playback should not pay for it.
                         val nowSpectrum = SystemClock.elapsedRealtimeNanos()
-                        val spectrumIntervalNs = 1_000_000_000L /
-                            SettingsManager.getVisualizerFps(applicationContext)
-                        if (nowSpectrum - lastSpectrumUpdateNs >= spectrumIntervalNs) {
+                        val spectrumIntervalNs = 1_000_000_000L / visualizerFps
+                        if (visualizerActive && nowSpectrum - lastSpectrumUpdateNs >= spectrumIntervalNs) {
                             // Advance the deadline rather than resetting it to `now`. Render chunks
                             // do not divide evenly into every display rate; preserving the remainder
                             // avoids turning a requested 120 FPS into ~86 FPS.
@@ -546,15 +551,19 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             ) nowSpectrum else lastSpectrumUpdateNs + spectrumIntervalNs
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
-                            // Channel levels for KSS
+                        }
+
+                        // Channel meters have their own modest cadence and do not scale with the
+                        // fullscreen visualizer FPS setting.
+                        val channelIntervalNs = 1_000_000_000L / 30L
+                        if (nowSpectrum - lastChannelSpectrumUpdateNs >= channelIntervalNs) {
+                            lastChannelSpectrumUpdateNs = nowSpectrum
                             val trackPath = currentLocalPath.orEmpty()
-                            if (trackPath.endsWith(".kss", ignoreCase = true) ||
-                                trackPath.endsWith(".mgs", ignoreCase = true)) {
-                                val spectrums = VgmEngine.getChannelSpectrums()
-                                _channelSpectrums.emit(spectrums)
-                            } else {
-                                _channelSpectrums.emit(null)
-                            }
+                            val channelData = if (
+                                trackPath.endsWith(".kss", ignoreCase = true) ||
+                                trackPath.endsWith(".mgs", ignoreCase = true)
+                            ) VgmEngine.getChannelSpectrums() else null
+                            _channelSpectrums.emit(channelData)
                         }
                     } else {
                         // fillBuffer returned 0 — PSF generation thread hasn't caught up yet.
@@ -567,6 +576,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
                         lastPositionUpdateMs = now
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                            val underruns = audioTrack?.underrunCount ?: 0
+                            if (underruns > lastUnderrunCount) {
+                                Log.w(TAG, "AudioTrack underruns: $lastUnderrunCount -> $underruns")
+                                lastUnderrunCount = underruns
+                            }
+                        }
                         updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
                     }
                     
@@ -867,6 +883,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val playing: Boolean get() = isPlaying && !isPaused
     val paused: Boolean get() = isPlaying && isPaused
     fun getMediaSession() = mediaSession
+    fun setVisualizerActive(active: Boolean) {
+        visualizerActive = active
+        if (active) {
+            visualizerFps = SettingsManager.getVisualizerFps(applicationContext)
+            lastSpectrumUpdateNs = 0L
+        }
+    }
 
     fun isSupportedDocument(displayName: String): Boolean =
         SupportedFormats.supports(displayName)

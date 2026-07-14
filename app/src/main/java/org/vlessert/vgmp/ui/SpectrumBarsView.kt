@@ -32,8 +32,7 @@ class SpectrumBarsView @JvmOverloads constructor(
     private var peaks: FloatArray? = null
     private var lastDrawMs = 0L
 
-    private val bandCount = 24
-    private val barCount = bandCount * 2
+    private val bandCount = 48
     private val barGap = 5f
     private val corner = 10f
 
@@ -130,11 +129,10 @@ class SpectrumBarsView @JvmOverloads constructor(
         val bottomInset = 12f
         val baseline = height - bottomInset
         val drawableHeight = (baseline - topInset).coerceAtLeast(1f)
-        val barWidth = (width - barGap * (barCount + 1)) / barCount
+        val barWidth = (width - barGap * (bandCount + 1)) / bandCount
 
-        for (i in 0 until barCount) {
-            val band = if (i < bandCount) bandCount - 1 - i else i - bandCount
-            val normalized = smoothed!![band]
+        for (i in 0 until bandCount) {
+            val normalized = smoothed!![i]
             val barHeight = max(4f, normalized * drawableHeight)
             val left = barGap + i * (barWidth + barGap)
             val top = baseline - barHeight
@@ -143,7 +141,7 @@ class SpectrumBarsView @JvmOverloads constructor(
             canvas.drawRoundRect(barRect, corner, corner, barPaint)
 
             // Peak cap
-            val peakY = baseline - peaks!![band] * drawableHeight
+            val peakY = baseline - peaks!![i] * drawableHeight
             barRect.set(left, peakY - 5f, left + barWidth, peakY)
             canvas.drawRoundRect(barRect, 4f, 4f, peakPaint)
         }

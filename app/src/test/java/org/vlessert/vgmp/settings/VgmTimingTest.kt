@@ -16,4 +16,11 @@ class VgmTimingTest {
         assertEquals(0, normalizeVgmPlaybackHz(42))
         assertEquals(60, nextVgmPlaybackHz(42))
     }
+
+    @Test
+    fun `embedded loop repeats stay within supported range`() {
+        assertEquals(0, normalizeLoopRepeats(-1))
+        assertEquals(1, normalizeLoopRepeats(1))
+        assertEquals(10, normalizeLoopRepeats(99))
+    }
 }

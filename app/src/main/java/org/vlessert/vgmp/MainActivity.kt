@@ -130,11 +130,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         
-        // Navigate up within the selected tree before backgrounding the app.
+        // Back unwinds overlays and tabs before navigating the selected tree or backgrounding.
         onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (isAnalyzerVisible) {
+                    hideAnalyzer()
+                    return
+                }
+                if (currentTabId != R.id.nav_browse) {
+                    binding.bottomNavigation.selectedItemId = R.id.nav_browse
+                    return
+                }
                 val browser = supportFragmentManager.findFragmentByTag("tab_browse") as? BrowserFragment
-                if (currentTabId == R.id.nav_browse && browser?.navigateUp() == true) return
+                if (browser?.navigateUp() == true) return
                 moveTaskToBack(true)
             }
         })

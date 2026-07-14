@@ -112,6 +112,29 @@ static int gKssTrackCount = 0;
 
 // Endless loop mode - disable track end detection for seamless SPC looping
 static bool gEndlessLoopMode = false;
+// Number of additional embedded loop-section repetitions during normal playback.
+static UINT32 gLoopRepeatCount = 0;
+
+static void applyGmeLoopPolicy() {
+  if (!gGmePlayer)
+    return;
+  gme_info_t *info = nullptr;
+  bool hasLoop = gme_track_info(gGmePlayer, &info, gGmeTrackIndex) == 0 &&
+                 info->loop_length > 0;
+  if (gEndlessLoopMode || hasLoop) {
+    // VGMP owns the finite duration/fade when loop metadata is available.
+    gme_set_autoload_playback_limit(gGmePlayer, 0);
+    gme_set_fade_msecs(gGmePlayer, -1, 8000);
+    gme_ignore_silence(gGmePlayer, 1);
+  } else {
+    gme_set_autoload_playback_limit(gGmePlayer, 1);
+    gme_ignore_silence(gGmePlayer, 0);
+    if (info && info->play_length > 0)
+      gme_set_fade_msecs(gGmePlayer, info->play_length, 8000);
+  }
+  if (info)
+    gme_free_info(info);
+}
 
 // FFT / Spectrum State
 #define FFT_SIZE 1024
@@ -496,12 +519,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
 
-    // Apply endless loop settings after starting track
-    // For SPC files, this enables true seamless infinite looping
-    if (gEndlessLoopMode) {
-      gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
-      gme_ignore_silence(gGmePlayer, 1); // disable silence-based end detection
-    }
+    applyGmeLoopPolicy();
 
     LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount,
          gSampleRate);
@@ -870,6 +888,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   }
 
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    if (gVgmPlayer->GetLoopTicks() > 0 &&
+        gVgmPlayer->GetCurLoop() > gLoopRepeatCount)
+      return JNI_TRUE;
     return (gVgmPlayer->GetState() & PLAYSTATE_END) ? JNI_TRUE : JNI_FALSE;
   }
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
@@ -956,20 +977,8 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetEndlessLoop(
     JNIEnv *env, jclass cls, jboolean enabled) {
   gEndlessLoopMode = (enabled == JNI_TRUE);
 
-  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
-    if (gEndlessLoopMode) {
-      // For SPC files, enable true seamless infinite looping:
-      gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
-      gme_ignore_silence(gGmePlayer, 1); // disable silence-based end detection
-    } else {
-      // Restore normal behavior
-      gme_set_fade_msecs(gGmePlayer, 0, 8000); // normal fade
-      gme_ignore_silence(gGmePlayer, 0);       // enable silence detection
-    }
-    // Also disable autoload playback limit - this prevents SPC files from
-    // automatically fading out based on their embedded track length metadata
-    gme_set_autoload_playback_limit(gGmePlayer, enabled ? 0 : 1);
-  }
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer)
+    applyGmeLoopPolicy();
   // For VGM, the endless loop is handled by the gEndlessLoopMode flag in
   // nIsEnded
 }
@@ -978,6 +987,21 @@ JNIEXPORT jboolean JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(JNIEnv *env,
                                                         jclass cls) {
   return gEndlessLoopMode ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nSetLoopRepeatCount(JNIEnv *env,
+                                                            jclass cls,
+                                                            jint repeats) {
+  gLoopRepeatCount = (UINT32)std::max(0, std::min(10, (int)repeats));
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer)
+    applyGmeLoopPolicy();
+}
+
+JNIEXPORT jint JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetLoopRepeatCount(JNIEnv *env,
+                                                            jclass cls) {
+  return (jint)gLoopRepeatCount;
 }
 
 JNIEXPORT void JNICALL
@@ -1003,8 +1027,11 @@ JNIEXPORT jlong JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
                                                          jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
-    // VGM files have accurate length from GD3 tags, use directly
-    return (jlong)gVgmPlayer->Tick2Sample(gVgmPlayer->GetTotalTicks());
+    UINT32 totalTicks = gVgmPlayer->GetTotalTicks();
+    UINT32 loopTicks = gVgmPlayer->GetLoopTicks();
+    if (loopTicks > 0)
+      totalTicks += loopTicks * gLoopRepeatCount;
+    return (jlong)gVgmPlayer->Tick2Sample(totalTicks);
   }
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
     gme_info_t *info;
@@ -1013,9 +1040,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
       int intro_ms = info->intro_length;
       int loop_ms = info->loop_length;
 
-      // Use intro + 2 loops for better estimate if available
+      // One loop-section pass is part of normal playback; add configured repeats.
       if (intro_ms > 0 && loop_ms > 0) {
-        length_ms = intro_ms + loop_ms * 2;
+        length_ms = intro_ms + loop_ms * (1 + (int)gLoopRepeatCount);
       }
 
       // If length is unreasonably short (< 30 seconds), default to 3 minutes
@@ -2800,13 +2827,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
       }
       gGmeTrackIndex = trackIndex;
 
-      // Apply endless loop settings after starting track
-      // For SPC files, this enables true seamless infinite looping
-      if (gEndlessLoopMode) {
-        gme_set_fade_msecs(gGmePlayer, -1, 0); // -1 = disable fade entirely
-        gme_ignore_silence(gGmePlayer,
-                           1); // disable silence-based end detection
-      }
+      applyGmeLoopPolicy();
 
       return JNI_TRUE;
     }

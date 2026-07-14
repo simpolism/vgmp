@@ -44,6 +44,35 @@
                 android:text="Browse ZIP archives as folders"
                 android:textColor="@color/vgmp_text_primary" />
 
+            <TextView style="@style/VGMP.SettingsHeader" android:text="Playback" />
+            <TextView style="@style/VGMP.SettingsLabel" android:text="Embedded loop repeats" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <SeekBar
+                    android:id="@+id/seekbar_loop_repeats"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="10"
+                    android:progressTint="@color/vgmp_accent"
+                    android:thumbTint="@color/vgmp_accent" />
+                <TextView
+                    android:id="@+id/tv_loop_repeats"
+                    android:layout_width="92dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:textColor="@color/vgmp_text_secondary" />
+            </LinearLayout>
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Additional repeats of an embedded loop section when the format provides one."
+                android:textColor="@color/vgmp_text_secondary"
+                android:textSize="12sp" />
+
             <TextView style="@style/VGMP.SettingsHeader" android:text="Visualization" />
             <TextView style="@style/VGMP.SettingsLabel" android:text="Fullscreen style" />
             <RadioGroup

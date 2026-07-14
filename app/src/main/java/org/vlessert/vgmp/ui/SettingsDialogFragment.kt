@@ -41,6 +41,9 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         binding.switchReverbEnabled.isChecked = SettingsManager.isReverbEnabled(context)
         binding.switchOpenPlayerOnSelection.isChecked = SettingsManager.openPlayerOnSelection(context)
         binding.switchZipBrowsing.isChecked = SettingsManager.isZipBrowsingEnabled(context)
+        val loopRepeats = SettingsManager.getLoopRepeats(context)
+        binding.seekbarLoopRepeats.progress = loopRepeats
+        binding.tvLoopRepeats.text = loopRepeatLabel(loopRepeats)
         when (SettingsManager.getAnalyzerStyle(context)) {
             SettingsManager.ANALYZER_STYLE_BARS -> binding.radioBars.isChecked = true
             else -> binding.radioKaleidoscope.isChecked = true
@@ -79,6 +82,17 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         binding.switchZipBrowsing.setOnCheckedChangeListener { _, enabled ->
             SettingsManager.setZipBrowsingEnabled(context, enabled)
         }
+        binding.seekbarLoopRepeats.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                binding.tvLoopRepeats.text = loopRepeatLabel(progress)
+                if (fromUser) {
+                    (activity as? org.vlessert.vgmp.MainActivity)?.getService()?.setLoopRepeats(progress)
+                        ?: SettingsManager.setLoopRepeats(context, progress)
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
         binding.radioAnalyzerStyle.setOnCheckedChangeListener { _, checkedId ->
             SettingsManager.setAnalyzerStyle(
                 context,
@@ -123,6 +137,12 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
+    }
+
+    private fun loopRepeatLabel(repeats: Int): String = when (repeats) {
+        0 -> "No repeats"
+        1 -> "1 repeat"
+        else -> "$repeats repeats"
     }
 
     companion object { fun newInstance() = SettingsDialogFragment() }

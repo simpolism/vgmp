@@ -13,6 +13,7 @@ VGMP is a fully offline Android player for video game music. It browses files th
 - Spectrum and per-channel visualizers
 - Track and queue loop controls
 - Persistent Auto/60 Hz/50 Hz timing control for VGM playback
+- Configurable embedded-loop repeats for formats that provide loop metadata
 - Bluetooth media controls and playlist browsing through Android Auto
 - No network or broad storage permissions
 

@@ -44,6 +44,7 @@ import org.vlessert.vgmp.playback.ZipArchiveStore
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
 import org.vlessert.vgmp.settings.nextVgmPlaybackHz
+import org.vlessert.vgmp.settings.normalizeLoopRepeats
 import org.vlessert.vgmp.settings.normalizeVgmPlaybackHz
 import java.io.File
 import java.io.IOException
@@ -431,6 +432,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     private suspend fun startTrackWithFocus(track: TrackRef, path: String) {
         VgmEngine.setVgmPlaybackHz(SettingsManager.getVgmPlaybackHz(applicationContext))
+        VgmEngine.setLoopRepeatCount(SettingsManager.getLoopRepeats(applicationContext))
         val opened = VgmEngine.open(path)
         if (!opened) {
             Log.e(TAG, "Failed to open $path")
@@ -967,21 +969,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         SettingsManager.setVgmPlaybackHz(applicationContext, normalized)
         serviceScope.launch {
             VgmEngine.setVgmPlaybackHz(normalized)
-            if (isVgmTimingSupported()) {
-                val positionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
-                val durationSamples = VgmEngine.getTotalSamples()
-                trackDurationMs = if (durationSamples > 0) {
-                    durationSamples * 1000L / SAMPLE_RATE
-                } else 0L
-                if (isPaused) pausedPositionMs = positionMs
-                else playbackStartTimeMs = SystemClock.elapsedRealtime() - positionMs
-                updateMediaSessionMetadata()
-                updatePlaybackState(
-                    if (isPaused) PlaybackStateCompat.STATE_PAUSED
-                    else PlaybackStateCompat.STATE_PLAYING
-                )
-                _playbackState.value = _playbackState.value.copy(durationMs = trackDurationMs)
-                updateNotification(isPlaying && !isPaused)
+            if (isPlaying && isVgmTimingSupported()) {
+                refreshTimelineFromEngine()
             }
         }
     }
@@ -991,5 +980,30 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val next = nextVgmPlaybackHz(getVgmPlaybackHz())
         setVgmPlaybackHz(next)
         return next
+    }
+
+    fun getLoopRepeats(): Int = SettingsManager.getLoopRepeats(applicationContext)
+
+    fun setLoopRepeats(repeats: Int) {
+        val normalized = normalizeLoopRepeats(repeats)
+        SettingsManager.setLoopRepeats(applicationContext, normalized)
+        serviceScope.launch {
+            VgmEngine.setLoopRepeatCount(normalized)
+            if (isPlaying) refreshTimelineFromEngine()
+        }
+    }
+
+    private suspend fun refreshTimelineFromEngine() {
+        val positionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
+        val durationSamples = VgmEngine.getTotalSamples()
+        trackDurationMs = if (durationSamples > 0) durationSamples * 1000L / SAMPLE_RATE else 0L
+        if (isPaused) pausedPositionMs = positionMs
+        else playbackStartTimeMs = SystemClock.elapsedRealtime() - positionMs
+        updateMediaSessionMetadata()
+        updatePlaybackState(
+            if (isPaused) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING
+        )
+        _playbackState.value = _playbackState.value.copy(durationMs = trackDurationMs)
+        updateNotification(isPlaying && !isPaused)
     }
 }

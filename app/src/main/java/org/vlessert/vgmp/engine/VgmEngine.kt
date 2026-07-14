@@ -67,6 +67,8 @@ object VgmEngine {
     // Endless loop mode
     @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
     @JvmStatic external fun nGetEndlessLoop(): Boolean
+    @JvmStatic external fun nSetLoopRepeatCount(repeats: Int)
+    @JvmStatic external fun nGetLoopRepeatCount(): Int
 
     // VGM timing: 0 = header/auto, otherwise 50 or 60 Hz
     @JvmStatic external fun nSetVgmPlaybackHz(hz: Int)
@@ -125,6 +127,8 @@ object VgmEngine {
     // Endless loop mode
     suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }
     suspend fun getEndlessLoop(): Boolean = mutex.withLock { nGetEndlessLoop() }
+    suspend fun setLoopRepeatCount(repeats: Int) = mutex.withLock { nSetLoopRepeatCount(repeats) }
+    suspend fun getLoopRepeatCount(): Int = mutex.withLock { nGetLoopRepeatCount() }
     
     suspend fun setVgmPlaybackHz(hz: Int) = mutex.withLock { nSetVgmPlaybackHz(hz) }
     suspend fun getVgmPlaybackHz(): Int = mutex.withLock { nGetVgmPlaybackHz() }

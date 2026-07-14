@@ -148,6 +148,15 @@
                 android:paddingVertical="10dp"
                 android:text="Reverb"
                 android:textColor="@color/vgmp_text_primary" />
+
+            <TextView
+                android:id="@+id/tv_version"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="28dp"
+                android:gravity="center"
+                android:textColor="@color/vgmp_text_secondary"
+                android:textSize="12sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

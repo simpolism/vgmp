@@ -2,6 +2,7 @@ package org.vlessert.vgmp.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.vlessert.vgmp.playback.selectArtwork
 
 class BrowserNavigationTest {
 

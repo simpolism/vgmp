@@ -36,6 +36,7 @@ import org.vlessert.vgmp.VgmServiceBinder
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.playback.ArtworkLoader
+import org.vlessert.vgmp.playback.ArtworkResolver
 import org.vlessert.vgmp.playback.PlaybackQueue
 import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.playback.TrackRef
@@ -346,7 +347,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         _artwork.value = null
         metadataArtwork = null
         val artworkLoad = async(Dispatchers.IO) {
-            track.artwork?.let { ArtworkLoader.load(applicationContext, it) }
+            ArtworkResolver.resolve(applicationContext, track)
+                ?.let { ArtworkLoader.load(applicationContext, it) }
         }
         val path = materialize(track) ?: run {
             artworkLoad.cancel()

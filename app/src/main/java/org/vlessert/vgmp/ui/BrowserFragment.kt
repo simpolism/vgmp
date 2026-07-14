@@ -22,6 +22,8 @@ import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.databinding.FragmentBrowserBinding
 import org.vlessert.vgmp.playback.ArtworkRef
+import org.vlessert.vgmp.playback.isArtwork
+import org.vlessert.vgmp.playback.selectArtwork
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.playback.TrackRef
@@ -331,27 +333,6 @@ class BrowserFragment : Fragment() {
         private const val KEY_CURRENT = "current_uri"
         fun newInstance() = BrowserFragment()
     }
-}
-
-private val ARTWORK_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp")
-private val ARTWORK_NAMES = listOf("cover", "folder", "front", "album", "artwork")
-
-private fun isArtwork(name: String): Boolean =
-    name.substringAfterLast('.', "").lowercase() in ARTWORK_EXTENSIONS
-
-/** Prefer track-specific art, then conventional cover names, then the first local image. */
-internal fun selectArtwork(trackName: String, imageNames: List<String>): String? {
-    val trackBase = trackName.substringBeforeLast('.', trackName).lowercase()
-    return imageNames.minWithOrNull(
-        compareBy<String> { name ->
-            val base = name.substringBeforeLast('.', name).lowercase()
-            when {
-                base == trackBase -> 0
-                base in ARTWORK_NAMES -> 1 + ARTWORK_NAMES.indexOf(base)
-                else -> 100
-            }
-        }.thenBy { it.lowercase() }
-    )
 }
 
 internal fun parentDocumentId(rootId: String, currentId: String): String {

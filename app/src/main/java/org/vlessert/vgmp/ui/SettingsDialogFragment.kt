@@ -35,6 +35,8 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
 
     private fun loadSettings() {
         val context = requireContext()
+        val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        binding.tvVersion.text = "VGMP $version"
         binding.switchBassEnabled.isChecked = SettingsManager.isBassEnabled(context)
         binding.switchReverbEnabled.isChecked = SettingsManager.isReverbEnabled(context)
         binding.switchOpenPlayerOnSelection.isChecked = SettingsManager.openPlayerOnSelection(context)

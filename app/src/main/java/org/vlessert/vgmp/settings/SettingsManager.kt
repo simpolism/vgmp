@@ -13,6 +13,7 @@ object SettingsManager {
     private const val KEY_ZIP_BROWSING = "zip_browsing"
     private const val KEY_BASS_ENABLED = "bass_enabled"
     private const val KEY_REVERB_ENABLED = "reverb_enabled"
+    private const val KEY_VGM_PLAYBACK_HZ = "vgm_playback_hz"
     private const val KEY_CHIP_VOLUME_PREFIX = "chip_volume_"
 
     const val ANALYZER_STYLE_KALEIDOSCOPE = "kaleidoscope"
@@ -70,6 +71,12 @@ object SettingsManager {
     fun setReverbEnabled(context: Context, enabled: Boolean) =
         getPrefs(context).edit().putBoolean(KEY_REVERB_ENABLED, enabled).apply()
 
+    fun getVgmPlaybackHz(context: Context): Int =
+        normalizeVgmPlaybackHz(getPrefs(context).getInt(KEY_VGM_PLAYBACK_HZ, 0))
+
+    fun setVgmPlaybackHz(context: Context, hz: Int) =
+        getPrefs(context).edit().putInt(KEY_VGM_PLAYBACK_HZ, normalizeVgmPlaybackHz(hz)).apply()
+
     private fun chipKey(chipName: String) = KEY_CHIP_VOLUME_PREFIX + chipName.lowercase().trim()
         .replace(Regex("[^a-z0-9]+"), "_")
 
@@ -78,4 +85,12 @@ object SettingsManager {
 
     fun setChipVolume(context: Context, chipName: String, volume: Int) =
         getPrefs(context).edit().putInt(chipKey(chipName), volume).apply()
+}
+
+internal fun normalizeVgmPlaybackHz(hz: Int): Int = hz.takeIf { it == 50 || it == 60 } ?: 0
+
+internal fun nextVgmPlaybackHz(hz: Int): Int = when (normalizeVgmPlaybackHz(hz)) {
+    0 -> 60
+    60 -> 50
+    else -> 0
 }

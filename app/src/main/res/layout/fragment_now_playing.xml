@@ -233,15 +233,20 @@
                     android:tint="@color/vgmp_text_secondary"
                     android:contentDescription="Loop" />
                 
-                <ImageButton
-                    android:id="@+id/btn_speed"
-                    android:layout_width="48dp"
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_timing"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="64dp"
                     android:layout_height="48dp"
                     android:layout_marginStart="16dp"
-                    android:src="@drawable/ic_speed"
-                    android:background="?attr/selectableItemBackgroundBorderless"
-                    android:tint="@color/vgmp_text_secondary"
-                    android:contentDescription="Playback speed" />
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:minWidth="0dp"
+                    android:paddingHorizontal="4dp"
+                    android:text="AUTO"
+                    android:textColor="@color/vgmp_text_secondary"
+                    android:textSize="12sp"
+                    android:contentDescription="VGM timing: Auto" />
             </LinearLayout>
 
             <com.google.android.material.button.MaterialButton

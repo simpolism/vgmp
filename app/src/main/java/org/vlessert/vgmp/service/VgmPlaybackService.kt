@@ -43,6 +43,8 @@ import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.playback.ZipArchiveStore
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
+import org.vlessert.vgmp.settings.nextVgmPlaybackHz
+import org.vlessert.vgmp.settings.normalizeVgmPlaybackHz
 import java.io.File
 import java.io.IOException
 import android.widget.Toast
@@ -428,6 +430,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private suspend fun startTrackWithFocus(track: TrackRef, path: String) {
+        VgmEngine.setVgmPlaybackHz(SettingsManager.getVgmPlaybackHz(applicationContext))
         val opened = VgmEngine.open(path)
         if (!opened) {
             Log.e(TAG, "Failed to open $path")
@@ -953,24 +956,40 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         return track.displayName.endsWith(".spc", ignoreCase = true)
     }
     
-    /**
-     * Check if the current track supports playback speed control.
-     * KSS, tracker formats (MOD, XM, S3M, IT), MIDI, and MUS don't support speed control.
-     */
-    fun isSpeedControlSupported(): Boolean {
-        val track = currentTrack ?: return false
-        val path = track.displayName.lowercase()
-        // KSS files
-        if (path.endsWith(".kss")) return false
-        // Tracker formats
-        if (path.endsWith(".mod") || path.endsWith(".xm") || 
-            path.endsWith(".s3m") || path.endsWith(".it") ||
-            path.endsWith(".mptm")) return false
-        // MIDI files
-        if (path.endsWith(".mid") || path.endsWith(".midi") ||
-            path.endsWith(".rmi") || path.endsWith(".smf")) return false
-        // MUS files (Doom music)
-        if (path.endsWith(".mus") || path.endsWith(".lmp")) return false
-        return true
+    fun isVgmTimingSupported(): Boolean = currentTrack?.displayName?.lowercase()?.let {
+        it.endsWith(".vgm") || it.endsWith(".vgz")
+    } == true
+
+    fun getVgmPlaybackHz(): Int = SettingsManager.getVgmPlaybackHz(applicationContext)
+
+    fun setVgmPlaybackHz(hz: Int) {
+        val normalized = normalizeVgmPlaybackHz(hz)
+        SettingsManager.setVgmPlaybackHz(applicationContext, normalized)
+        serviceScope.launch {
+            VgmEngine.setVgmPlaybackHz(normalized)
+            if (isVgmTimingSupported()) {
+                val positionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
+                val durationSamples = VgmEngine.getTotalSamples()
+                trackDurationMs = if (durationSamples > 0) {
+                    durationSamples * 1000L / SAMPLE_RATE
+                } else 0L
+                if (isPaused) pausedPositionMs = positionMs
+                else playbackStartTimeMs = SystemClock.elapsedRealtime() - positionMs
+                updateMediaSessionMetadata()
+                updatePlaybackState(
+                    if (isPaused) PlaybackStateCompat.STATE_PAUSED
+                    else PlaybackStateCompat.STATE_PLAYING
+                )
+                _playbackState.value = _playbackState.value.copy(durationMs = trackDurationMs)
+                updateNotification(isPlaying && !isPaused)
+            }
+        }
+    }
+
+    /** Cycle the persistent libvgm timing override: header/auto → 60 Hz → 50 Hz. */
+    fun cycleVgmPlaybackHz(): Int {
+        val next = nextVgmPlaybackHz(getVgmPlaybackHz())
+        setVgmPlaybackHz(next)
+        return next
     }
 }

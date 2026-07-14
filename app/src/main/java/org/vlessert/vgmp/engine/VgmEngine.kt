@@ -68,9 +68,9 @@ object VgmEngine {
     @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
     @JvmStatic external fun nGetEndlessLoop(): Boolean
 
-    // Playback speed control
-    @JvmStatic external fun nSetPlaybackSpeed(speed: Double)
-    @JvmStatic external fun nGetPlaybackSpeed(): Double
+    // VGM timing: 0 = header/auto, otherwise 50 or 60 Hz
+    @JvmStatic external fun nSetVgmPlaybackHz(hz: Int)
+    @JvmStatic external fun nGetVgmPlaybackHz(): Int
 
     // KSS direct track info (without opening as active track)
     @JvmStatic external fun nGetKssTrackCountDirect(path: String): Int
@@ -126,9 +126,8 @@ object VgmEngine {
     suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }
     suspend fun getEndlessLoop(): Boolean = mutex.withLock { nGetEndlessLoop() }
     
-    // Playback speed control
-    suspend fun setPlaybackSpeed(speed: Double) = mutex.withLock { nSetPlaybackSpeed(speed) }
-    suspend fun getPlaybackSpeed(): Double = mutex.withLock { nGetPlaybackSpeed() }
+    suspend fun setVgmPlaybackHz(hz: Int) = mutex.withLock { nSetVgmPlaybackHz(hz) }
+    suspend fun getVgmPlaybackHz(): Int = mutex.withLock { nGetVgmPlaybackHz() }
     
     // KSS direct track info
     suspend fun getKssTrackCountDirect(path: String): Int = mutex.withLock { nGetKssTrackCountDirect(path) }

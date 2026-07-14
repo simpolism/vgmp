@@ -134,6 +134,41 @@
             </LinearLayout>
 
             <TextView style="@style/VGMP.SettingsHeader" android:text="Chip / backend" />
+            <TextView style="@style/VGMP.SettingsLabel" android:text="VGM playback timing" />
+            <RadioGroup
+                android:id="@+id/radio_vgm_timing"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <RadioButton
+                    android:id="@+id/radio_timing_auto"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Auto"
+                    android:textColor="@color/vgmp_text_primary" />
+                <RadioButton
+                    android:id="@+id/radio_timing_60"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="60 Hz"
+                    android:textColor="@color/vgmp_text_primary" />
+                <RadioButton
+                    android:id="@+id/radio_timing_50"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="50 Hz"
+                    android:textColor="@color/vgmp_text_primary" />
+            </RadioGroup>
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:text="Global override for VGM/VGZ timing; Auto honors the file header."
+                android:textColor="@color/vgmp_text_secondary"
+                android:textSize="12sp" />
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_bass_enabled"
                 android:layout_width="match_parent"

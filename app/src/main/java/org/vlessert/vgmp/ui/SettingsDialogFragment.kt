@@ -53,6 +53,11 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
             SettingsManager.VISUALIZER_RESPONSE_BALANCED -> binding.radioResponseBalanced.isChecked = true
             else -> binding.radioResponseRaw.isChecked = true
         }
+        when (SettingsManager.getVgmPlaybackHz(context)) {
+            60 -> binding.radioTiming60.isChecked = true
+            50 -> binding.radioTiming50.isChecked = true
+            else -> binding.radioTimingAuto.isChecked = true
+        }
         val fps = SettingsManager.getVisualizerFps(context)
         binding.seekbarVisualizerFps.progress = fps - 15
         binding.tvVisualizerFps.text = "$fps FPS"
@@ -94,6 +99,15 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
                 if (checkedId == R.id.radio_response_balanced) SettingsManager.VISUALIZER_RESPONSE_BALANCED
                 else SettingsManager.VISUALIZER_RESPONSE_RAW
             )
+        }
+        binding.radioVgmTiming.setOnCheckedChangeListener { _, checkedId ->
+            val hz = when (checkedId) {
+                R.id.radio_timing_60 -> 60
+                R.id.radio_timing_50 -> 50
+                else -> 0
+            }
+            (activity as? org.vlessert.vgmp.MainActivity)?.getService()?.setVgmPlaybackHz(hz)
+                ?: SettingsManager.setVgmPlaybackHz(context, hz)
         }
         binding.seekbarVisualizerFps.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {

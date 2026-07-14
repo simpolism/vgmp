@@ -37,9 +37,6 @@ class NowPlayingFragment : Fragment() {
     private val handler = Handler(Looper.getMainLooper())
     private var isSeeking = false
     
-    // Playback speed options: 100%, 75%, 50%, 25%
-    private val speedOptions = doubleArrayOf(1.0, 0.75, 0.5, 0.25)
-    private var currentSpeedIndex = 0
     private var notesExpanded = false
     private var notesTrackKey: String? = null
     
@@ -215,16 +212,16 @@ class NowPlayingFragment : Fragment() {
             updateEndlessLoopButton()
             showStyledToast(if (newMode) "Endless loop enabled" else "Endless loop disabled")
         }
-        binding.btnSpeed.setOnClickListener {
-            // Cycle through speed options: 100% -> 75% -> 50% -> 25% -> 100%
-            currentSpeedIndex = (currentSpeedIndex + 1) % speedOptions.size
-            val speed = speedOptions[currentSpeedIndex]
-            viewLifecycleOwner.lifecycleScope.launch {
-                VgmEngine.setPlaybackSpeed(speed)
-                updateSpeedButton()
-                val speedPercent = (speed * 100).toInt()
-                showStyledToast("Speed: $speedPercent%")
-            }
+        binding.btnTiming.setOnClickListener {
+            val hz = service?.cycleVgmPlaybackHz() ?: return@setOnClickListener
+            updateTimingButton()
+            showStyledToast(
+                when (hz) {
+                    60 -> "VGM timing: 60 Hz (NTSC)"
+                    50 -> "VGM timing: 50 Hz (PAL)"
+                    else -> "VGM timing: Auto (use file header)"
+                }
+            )
         }
     }
 
@@ -400,8 +397,7 @@ class NowPlayingFragment : Fragment() {
         // Update endless loop button
         updateEndlessLoopButton()
         
-        // Update speed button
-        updateSpeedButton()
+        updateTimingButton()
     }
 
     private fun updateTrackFavoriteButton() {
@@ -468,28 +464,25 @@ class NowPlayingFragment : Fragment() {
         }
     }
 
-    private fun updateSpeedButton() {
+    private fun updateTimingButton() {
         val binding = _binding ?: return
-        val svc = service
-        
-        // Hide speed button for KSS and tracker formats
-        if (svc != null && !svc.isSpeedControlSupported()) {
-            binding.btnSpeed.visibility = View.GONE
-            return
+        val svc = service ?: return
+        val supported = svc.isVgmTimingSupported()
+        val hz = svc.getVgmPlaybackHz()
+        binding.btnTiming.isEnabled = supported
+        binding.btnTiming.text = if (hz == 0) "AUTO" else hz.toString()
+        binding.btnTiming.contentDescription = when (hz) {
+            60 -> "VGM timing: 60 hertz"
+            50 -> "VGM timing: 50 hertz PAL"
+            else -> "VGM timing: Auto"
         }
-        
-        binding.btnSpeed.visibility = View.VISIBLE
-        val speed = speedOptions[currentSpeedIndex]
-        val speedPercent = (speed * 100).toInt()
-        
-        if (speedPercent == 100) {
-            // Normal speed - dimmed appearance
-            binding.btnSpeed.setColorFilter(resources.getColor(R.color.vgmp_text_secondary, null))
-            binding.btnSpeed.alpha = 0.5f
-        } else {
-            // Reduced speed - highlighted
-            binding.btnSpeed.setColorFilter(resources.getColor(R.color.vgmp_accent, null))
-            binding.btnSpeed.alpha = 1.0f
+        binding.btnTiming.setTextColor(
+            resources.getColor(if (hz == 0) R.color.vgmp_text_secondary else R.color.vgmp_accent, null)
+        )
+        binding.btnTiming.alpha = when {
+            !supported -> 0.25f
+            hz == 0 -> 0.55f
+            else -> 1f
         }
     }
 

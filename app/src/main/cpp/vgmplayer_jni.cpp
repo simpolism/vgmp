@@ -77,6 +77,8 @@ static DATA_LOADER *gLoader = nullptr;
 static char *gTitleBuf = nullptr;
 static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
+// 0 honors the VGM header; 50/60 override its recorded refresh rate.
+static UINT32 gVgmPlaybackHz = 0;
 static std::string gRomPath = "";
 
 // PSF playback state - asynchronous generation and streaming with improved
@@ -809,7 +811,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
 
   VGM_PLAY_OPTIONS opts;
   memset(&opts, 0, sizeof(opts));
-  opts.playbackHz = 0;
+  opts.playbackHz = gVgmPlaybackHz;
   gVgmPlayer->SetPlayerOptions(opts);
 
   if (gVgmPlayer->LoadFile(gLoader)) {
@@ -978,33 +980,23 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetEndlessLoop(JNIEnv *env,
   return gEndlessLoopMode ? JNI_TRUE : JNI_FALSE;
 }
 
-// Playback speed control (0.25 to 1.0 for 25% to 100%)
-static double gPlaybackSpeed = 1.0;
-
 JNIEXPORT void JNICALL
-Java_org_vlessert_vgmp_engine_VgmEngine_nSetPlaybackSpeed(JNIEnv *env,
+Java_org_vlessert_vgmp_engine_VgmEngine_nSetVgmPlaybackHz(JNIEnv *env,
                                                           jclass cls,
-                                                          jdouble speed) {
-  gPlaybackSpeed = speed;
-
+                                                          jint hz) {
+  gVgmPlaybackHz = (hz == 50 || hz == 60) ? (UINT32)hz : 0;
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
-    gVgmPlayer->SetPlaybackSpeed(speed);
+    VGM_PLAY_OPTIONS opts;
+    gVgmPlayer->GetPlayerOptions(opts);
+    opts.playbackHz = gVgmPlaybackHz;
+    gVgmPlayer->SetPlayerOptions(opts);
   }
-  if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
-    // gme_set_tempo uses tempo where 1.0 = normal, 2.0 = double speed
-    gme_set_tempo(gGmePlayer, speed);
-  }
-  if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
-    // KSSPLAY uses CPU speed multiplier (1.0 = normal, 2.0 = double speed)
-    KSSPLAY_set_speed(gKssPlay, speed);
-  }
-  // libopenmpt doesn't have a direct speed control API
 }
 
-JNIEXPORT jdouble JNICALL
-Java_org_vlessert_vgmp_engine_VgmEngine_nGetPlaybackSpeed(JNIEnv *env,
+JNIEXPORT jint JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetVgmPlaybackHz(JNIEnv *env,
                                                           jclass cls) {
-  return gPlaybackSpeed;
+  return (jint)gVgmPlaybackHz;
 }
 
 JNIEXPORT jlong JNICALL

@@ -8,10 +8,12 @@ class PlaybackQueue<T> {
 
     val current: T? get() = tracks.getOrNull(index)
     val size: Int get() = tracks.size
+    private val shuffleHistory = ArrayDeque<Int>()
 
     fun replace(items: List<T>, startIndex: Int) {
         tracks = items
         index = if (items.isEmpty()) -1 else startIndex.coerceIn(items.indices)
+        shuffleHistory.clear()
     }
 
     fun moveNext(wrap: Boolean): T? {
@@ -30,7 +32,16 @@ class PlaybackQueue<T> {
 
     fun moveRandom(): T? {
         if (tracks.isEmpty()) return null
-        index = tracks.indices.random()
+        if (tracks.size == 1) return current
+        if (index in tracks.indices) shuffleHistory.addLast(index)
+        index = tracks.indices.filter { it != index }.random()
+        return current
+    }
+
+    fun movePreviousRandom(): T? {
+        if (tracks.isEmpty()) return null
+        val previous = shuffleHistory.removeLastOrNull() ?: return current
+        index = previous.coerceIn(tracks.indices)
         return current
     }
 }

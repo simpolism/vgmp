@@ -2,6 +2,8 @@ package org.vlessert.vgmp.playback
 
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -26,8 +28,21 @@ class ZipArchiveStore(private val context: Context) {
 
     private fun localArchive(uri: Uri): File {
         val dir = File(context.cacheDir, "zip-archives").also { it.mkdirs() }
+        val metadata = runCatching {
+            context.contentResolver.query(
+                uri,
+                arrayOf(OpenableColumns.SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED),
+                null, null, null
+            )?.use { cursor ->
+                if (!cursor.moveToFirst()) null else {
+                    val size = cursor.getLong(0).takeUnless { cursor.isNull(0) } ?: -1L
+                    val modified = cursor.getLong(1).takeUnless { cursor.isNull(1) } ?: -1L
+                    "$size:$modified"
+                }
+            }
+        }.getOrNull() ?: "unknown"
         val name = MessageDigest.getInstance("SHA-256")
-            .digest(uri.toString().toByteArray())
+            .digest("$uri|$metadata".toByteArray())
             .joinToString("") { "%02x".format(it) }
         val destination = File(dir, "$name.zip")
         if (!destination.exists()) synchronized(copyLock) {
@@ -37,13 +52,37 @@ class ZipArchiveStore(private val context: Context) {
                     temp.outputStream().use { output -> input.copyTo(output) }
                 } ?: error("Could not open ZIP archive")
                 check(temp.renameTo(destination)) { "Could not cache ZIP archive" }
+                trimCache(dir, destination)
             }
         }
+        destination.setLastModified(System.currentTimeMillis())
         return destination
     }
 
     companion object {
         private val copyLock = Any()
+        private const val MAX_CACHE_BYTES = 512L * 1024L * 1024L
+
+        fun cacheSize(context: Context): Long =
+            File(context.cacheDir, "zip-archives").listFiles()?.sumOf(File::length) ?: 0L
+
+        fun clearCache(context: Context) {
+            synchronized(copyLock) {
+                File(context.cacheDir, "zip-archives").listFiles()?.forEach(File::delete)
+            }
+        }
+
+        private fun trimCache(dir: File, protected: File) {
+            val files = dir.listFiles()?.filter { it.isFile && it.extension == "zip" }
+                ?.sortedBy(File::lastModified) ?: return
+            var total = files.sumOf(File::length)
+            for (file in files) {
+                if (total <= MAX_CACHE_BYTES) break
+                if (file == protected) continue
+                val length = file.length()
+                if (file.delete()) total -= length
+            }
+        }
 
         internal fun listArchive(archive: File, path: String): List<Item> {
             val prefix = path.trim('/').let { if (it.isEmpty()) "" else "$it/" }

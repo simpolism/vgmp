@@ -26,6 +26,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.media.MediaBrowserServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
+import androidx.media.session.MediaButtonReceiver
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,6 +114,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var lastUnderrunCount = 0
 
     private var renderJob: Job? = null
+    private var engineCleanupJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
 
     private val _playbackState = MutableStateFlow<PlaybackInfo>(PlaybackInfo())
@@ -127,9 +129,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val endlessLoop: Boolean = false
     )
 
-    // Position tracking
-    private var playbackStartTimeMs = 0L
-    private var pausedPositionMs    = 0L
+    // Engine-derived position avoids wall-clock drift during stalls and underruns.
+    @Volatile private var enginePositionMs = 0L
+    private var pausedPositionMs = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -137,10 +139,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         createNotificationChannel()
         setupMediaSession()
         
-        // Fix for "Context.startForegroundService() did not then call Service.startForeground()"
-        // We must call startForeground immediately upon creation when started as a foreground service.
-        startForeground(NOTIF_ID, buildNotification(false))
-
         VgmEngine.nSetSampleRate(SAMPLE_RATE)
         audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
 
@@ -342,9 +340,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     // ------- Playback control -------
 
     fun playQueue(tracks: List<TrackRef>, startIndex: Int = 0) {
+        val requested = tracks.getOrNull(startIndex)
         val playable = tracks.filter { isSupportedDocument(it.displayName) }
-        queue.replace(playable, startIndex)
-        if (queue.current == null) return
+        val playableIndex = requested?.let(playable::indexOf)?.takeIf { it >= 0 } ?: 0
+        queue.replace(playable, playableIndex)
+        if (queue.current == null) {
+            Toast.makeText(applicationContext, "No playable tracks", Toast.LENGTH_SHORT).show()
+            return
+        }
         serviceScope.launch { startCurrentTrack() }
     }
 
@@ -508,8 +511,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         // Start audio track and render loop
         isPlaying = true
         isPaused  = false
-        playbackStartTimeMs = SystemClock.elapsedRealtime()
-        pausedPositionMs    = 0L
+        enginePositionMs = 0L
+        pausedPositionMs = 0L
 
         audioTrack?.release()
         audioTrack = createAudioTrack().also { it.play() }
@@ -576,6 +579,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val now = SystemClock.elapsedRealtime()
                     if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
                         lastPositionUpdateMs = now
+                        enginePositionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                             val underruns = audioTrack?.underrunCount ?: 0
                             if (underruns > lastUnderrunCount) {
@@ -617,7 +621,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (!isFadingOut) return
         
         val elapsed = SystemClock.elapsedRealtime() - fadeStartTimeMs
-        val fadeFactor = (1.0f - (elapsed.toFloat() / FADE_MS)).coerceIn(0f, 100f)
+        val fadeFactor = (1.0f - (elapsed.toFloat() / FADE_MS)).coerceIn(0f, 1f)
         
         for (i in 0 until (frames * 2)) {
             buffer[i] = (buffer[i] * fadeFactor).toInt().toShort()
@@ -651,10 +655,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
         if (isPaused) {
             isPaused = false
-            playbackStartTimeMs = SystemClock.elapsedRealtime() - pausedPositionMs
             audioTrack?.play()
             updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-            updateNotification(true)
+            startForeground(NOTIF_ID, buildNotification(true))
             _playbackState.value = _playbackState.value.copy(paused = false, playing = true)
         }
     }
@@ -662,18 +665,24 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private fun pausePlayback() {
         if (!isPlaying || isPaused) return
         isPaused = true
-        pausedPositionMs = SystemClock.elapsedRealtime() - playbackStartTimeMs
+        pausedPositionMs = enginePositionMs
         audioTrack?.pause()
         updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
         updateNotification(false)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_DETACH)
+        }
         _playbackState.value = _playbackState.value.copy(paused = true, playing = true)
     }
 
     private fun stopPlayback() {
         isPlaying = false
         isPaused = false
+        enginePositionMs = 0L
+        pausedPositionMs = 0L
         stopRenderJob()
-        serviceScope.launch {
+        engineCleanupJob?.cancel()
+        engineCleanupJob = serviceScope.launch(Dispatchers.IO) {
             VgmEngine.stop()
             VgmEngine.close()
         }
@@ -710,14 +719,31 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     fun previousTrack() {
         serviceScope.launch {
-            if (queue.movePrevious() != null) startCurrentTrack()
+            if (currentPositionMs() > 3_000L) {
+                seekTo(0L)
+                return@launch
+            }
+            if (!isFadingOut) {
+                startFadeOut()
+                delay(500)
+            }
+            val previous = if (shuffleMode == ShuffleMode.ON) {
+                queue.movePreviousRandom()
+            } else {
+                queue.movePrevious()
+            }
+            if (previous != null) startCurrentTrack()
         }
     }
     private fun seekTo(posMs: Long) {
-        val samplePos = posMs * SAMPLE_RATE / 1000L
-        serviceScope.launch { VgmEngine.seek(samplePos) }
-        pausedPositionMs = posMs
-        playbackStartTimeMs = SystemClock.elapsedRealtime() - posMs
+        val maximum = trackDurationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+        val clamped = posMs.coerceIn(0L, maximum)
+        isFadingOut = false
+        fadeStartTimeMs = 0L
+        val samplePos = clamped * SAMPLE_RATE / 1000L
+        serviceScope.launch(Dispatchers.IO) { VgmEngine.seek(samplePos) }
+        enginePositionMs = clamped
+        pausedPositionMs = clamped
         updatePlaybackState(if (isPaused) PlaybackStateCompat.STATE_PAUSED
                             else PlaybackStateCompat.STATE_PLAYING)
     }
@@ -725,8 +751,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     // ------- Playback state / notification -------
 
     private fun currentPositionMs(): Long {
-        return if (isPaused) pausedPositionMs
-        else SystemClock.elapsedRealtime() - playbackStartTimeMs
+        return if (!isPlaying) 0L else if (isPaused) pausedPositionMs else enginePositionMs
     }
 
     private fun updatePlaybackState(state: Int) {
@@ -817,34 +842,41 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaBrowserCompat.MediaItem>>) {
-        val items = mutableListOf<MediaBrowserCompat.MediaItem>()
-        val playlists = PlaylistStore.getAll(applicationContext)
-        if (parentId == MEDIA_ID_ROOT) {
-            playlists.forEach { playlist ->
-                val description = MediaDescriptionCompat.Builder()
-                    .setMediaId("playlist/${playlist.id}")
-                    .setTitle(playlist.name)
-                    .setSubtitle("${playlist.tracks.size} tracks")
-                    .setIconBitmap(getScaledArtForAuto())
-                    .build()
-                items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE)
+        result.detach()
+        serviceScope.launch(Dispatchers.IO) {
+            val items = mutableListOf<MediaBrowserCompat.MediaItem>()
+            val playlists = PlaylistStore.getAll(applicationContext)
+            if (parentId == MEDIA_ID_ROOT) {
+                playlists.forEach { playlist ->
+                    val icon = playlist.tracks.firstOrNull()?.toTrackRef()?.let(::getScaledArtForAuto)
+                    val description = MediaDescriptionCompat.Builder()
+                        .setMediaId("playlist/${playlist.id}")
+                        .setTitle(playlist.name)
+                        .setSubtitle("${playlist.tracks.size} tracks")
+                        .setIconBitmap(icon ?: getScaledArtForAuto())
+                        .build()
+                    items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_BROWSABLE)
+                }
+            } else if (parentId.startsWith("playlist/")) {
+                val playlistId = parentId.removePrefix("playlist/")
+                playlists.firstOrNull { it.id == playlistId }?.tracks?.forEachIndexed { index, track ->
+                    val description = MediaDescriptionCompat.Builder()
+                        .setMediaId("track/$playlistId/$index")
+                        .setTitle(track.displayName.substringBeforeLast('.', track.displayName))
+                        .setIconBitmap(getScaledArtForAuto(track.toTrackRef()) ?: getScaledArtForAuto())
+                        .build()
+                    items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
+                }
             }
-        } else if (parentId.startsWith("playlist/")) {
-            val playlistId = parentId.removePrefix("playlist/")
-            playlists.firstOrNull { it.id == playlistId }?.tracks?.forEachIndexed { index, track ->
-                val description = MediaDescriptionCompat.Builder()
-                    .setMediaId("track/$playlistId/$index")
-                    .setTitle(track.displayName.substringBeforeLast('.', track.displayName))
-                    .setIconBitmap(getScaledArtForAuto())
-                    .build()
-                items += MediaBrowserCompat.MediaItem(description, MediaBrowserCompat.MediaItem.FLAG_PLAYABLE)
-            }
+            result.sendResult(items)
         }
-        result.sendResult(items)
     }
     // Get scaled art for Android Auto (256x256 is recommended size)
-    private fun getScaledArtForAuto(): Bitmap? {
-        val sourceBitmap = getFallbackArt() ?: return null
+    private fun getScaledArtForAuto(track: TrackRef? = null): Bitmap? {
+        val sourceBitmap = track?.let { ref ->
+            ArtworkResolver.resolve(applicationContext, ref)
+                ?.let { ArtworkLoader.load(applicationContext, it, 256) }
+        } ?: getFallbackArt() ?: return null
 
         // Crop to square first (only if not already square)
         val squareBitmap = if (sourceBitmap.width != sourceBitmap.height) {
@@ -861,6 +893,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        MediaButtonReceiver.handleIntent(mediaSession, intent)
         when (intent?.action) {
             ACTION_PLAY   -> sessionCallback.onPlay()
             ACTION_PAUSE  -> sessionCallback.onPause()
@@ -872,10 +905,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         stopPlayback()
+        runBlocking {
+            withTimeoutOrNull(5_000L) { engineCleanupJob?.join() }
+        }
         mediaSession.release()
         serviceScope.cancel()
+        super.onDestroy()
     }
 
     // --- Expose state to bound activities ---
@@ -1020,8 +1056,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val positionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
         val durationSamples = VgmEngine.getTotalSamples()
         trackDurationMs = if (durationSamples > 0) durationSamples * 1000L / SAMPLE_RATE else 0L
+        enginePositionMs = positionMs
         if (isPaused) pausedPositionMs = positionMs
-        else playbackStartTimeMs = SystemClock.elapsedRealtime() - positionMs
         updateMediaSessionMetadata()
         updatePlaybackState(
             if (isPaused) PlaybackStateCompat.STATE_PAUSED else PlaybackStateCompat.STATE_PLAYING

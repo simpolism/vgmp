@@ -45,6 +45,8 @@
 #include "memio.h"
 #include "mus2mid.h"
 
+extern "C" void psxShutdown(void);
+
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, "VgmJNI", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VgmJNI", __VA_ARGS__)
 
@@ -85,6 +87,8 @@ static std::string gRomPath = "";
 // thread safety
 #include <atomic>
 #include <memory>
+#include <new>
+#include <stdexcept>
 #include <thread>
 static std::mutex gPsfStateMutex;
 static std::shared_ptr<std::vector<uint8_t>>
@@ -101,6 +105,85 @@ static std::atomic<int> gPsfCurrentGeneration{0};
 static std::atomic<bool> gPsfGenerationComplete{false};
 static std::thread gPsfGenerationThread; // thread handle for PSF generation
 
+template <typename Byte>
+static bool readWholeFile(const char *path, std::vector<Byte> &out) {
+  static_assert(sizeof(Byte) == 1, "byte-sized buffers only");
+  FILE *f = fopen(path, "rb");
+  if (!f)
+    return false;
+  bool ok = fseek(f, 0, SEEK_END) == 0;
+  long size = ok ? ftell(f) : -1;
+  ok = ok && size >= 0 && fseek(f, 0, SEEK_SET) == 0;
+  if (ok) {
+    try {
+      out.resize(static_cast<size_t>(size));
+      ok = size == 0 || fread(out.data(), 1, static_cast<size_t>(size), f) ==
+                            static_cast<size_t>(size);
+    } catch (const std::bad_alloc &) {
+      ok = false;
+    } catch (const std::length_error &) {
+      ok = false;
+    }
+  }
+  fclose(f);
+  if (!ok)
+    out.clear();
+  return ok;
+}
+
+// Construct Java strings through String(byte[], charset), avoiding NewStringUTF's
+// Modified-UTF-8 contract for metadata supplied by files and third-party decoders.
+static jstring newDecodedString(JNIEnv *env, const std::string &bytes,
+                                const char *charset) {
+  jclass stringClass = env->FindClass("java/lang/String");
+  if (!stringClass)
+    return nullptr;
+  jmethodID ctor = env->GetMethodID(stringClass, "<init>", "([BLjava/lang/String;)V");
+  if (!ctor)
+    return nullptr;
+  jbyteArray data = env->NewByteArray(static_cast<jsize>(bytes.size()));
+  if (!data)
+    return nullptr;
+  if (!bytes.empty())
+    env->SetByteArrayRegion(data, 0, static_cast<jsize>(bytes.size()),
+                            reinterpret_cast<const jbyte *>(bytes.data()));
+  jstring encoding = env->NewStringUTF(charset);
+  if (!encoding) {
+    env->DeleteLocalRef(data);
+    return nullptr;
+  }
+  jstring result = static_cast<jstring>(env->NewObject(stringClass, ctor, data, encoding));
+  env->DeleteLocalRef(encoding);
+  env->DeleteLocalRef(data);
+  env->DeleteLocalRef(stringClass);
+  return result;
+}
+
+static bool isValidUtf8(const std::string &s) {
+  const auto *p = reinterpret_cast<const unsigned char *>(s.data());
+  size_t i = 0;
+  while (i < s.size()) {
+    unsigned char c = p[i++];
+    if (c < 0x80)
+      continue;
+    int continuation = c >= 0xC2 && c <= 0xDF ? 1
+                     : c >= 0xE0 && c <= 0xEF ? 2
+                     : c >= 0xF0 && c <= 0xF4 ? 3 : -1;
+    if (continuation < 0 || i + continuation > s.size())
+      return false;
+    for (int n = 0; n < continuation; ++n)
+      if ((p[i++] & 0xC0) != 0x80)
+        return false;
+  }
+  return true;
+}
+
+static jstring newMetadataString(JNIEnv *env, const std::string &bytes,
+                                 const char *fallbackCharset) {
+  return newDecodedString(env, bytes,
+                          isValidUtf8(bytes) ? "UTF-8" : fallbackCharset);
+}
+
 // Current track index for libgme (NSF can have multiple tracks)
 static int gGmeTrackIndex = 0;
 static int gGmeTrackCount = 0;
@@ -109,6 +192,7 @@ static std::vector<bool> gGmeMutedChannels;
 // Current track index for libkss (KSS can have multiple tracks)
 static int gKssTrackIndex = 0;
 static int gKssTrackCount = 0;
+static uint64_t gKssCurrentSample = 0;
 
 // Endless loop mode - disable track end detection for seamless SPC looping
 static bool gEndlessLoopMode = false;
@@ -187,13 +271,14 @@ void sexyd_update(unsigned char *pSound, long lBytes) {
   if (!gPsfAudioCachePtr)
     return;
 
-  // Pre-reserve on first real chunk — up to 20 min of stereo 16-bit audio.
-  // This means insert() will NEVER reallocate, keeping the raw buffer pointer
-  // stable so fillBuffer can read without the lock.
-  if (gPsfAudioCachePtr->capacity() == 0)
-    gPsfAudioCachePtr->reserve(44100 * 4 * 1200); // ~20 min
-
-  gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), pSound, pSound + lBytes);
+  try {
+    gPsfAudioCachePtr->insert(gPsfAudioCachePtr->end(), pSound, pSound + lBytes);
+  } catch (const std::bad_alloc &) {
+    LOGE("PSF audio cache allocation failed; stopping generation");
+    gPsfGenerationComplete.store(true, std::memory_order_release);
+    sexy_stop();
+    return;
+  }
 
   // Advance committed bytes AFTER insert() returns, so the lock-free reader
   // in fillBuffer only ever sees fully-written data.
@@ -392,15 +477,15 @@ static void cleanup() {
     gAdlPlayer = nullptr;
   }
 
-  // Cleanup libpsf
-  if (gPsfInfo) {
-    sexy_freepsfinfo(gPsfInfo);
-    gPsfInfo = nullptr;
-  }
   // Stop and join PSF generation thread if running
   if (gPsfGenerationThread.joinable()) {
     sexy_stop(); // signal generation to abort
     gPsfGenerationThread.join();
+  }
+  if (gPsfInfo) {
+    psxShutdown();
+    sexy_freepsfinfo(gPsfInfo);
+    gPsfInfo = nullptr;
   }
   // Invalidate PSF generation and clear cache
   {
@@ -430,6 +515,7 @@ static void cleanup() {
   gGmeTrackCount = 0;
   gKssTrackIndex = 0;
   gKssTrackCount = 0;
+  gKssCurrentSample = 0;
 
   if (gLoader) {
     DataLoader_Deinit(gLoader);
@@ -574,42 +660,29 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     LOGD("Detected KSS format: %s", path);
 
     // Read the entire file into memory for libkss
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
+    std::vector<uint8_t> fileData;
+    if (!readWholeFile(path, fileData)) {
       LOGE("Failed to open KSS file: %s", path);
       env->ReleaseStringUTFChars(jpath, path);
       return JNI_FALSE;
     }
-
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    LOGD("KSS file size: %ld bytes", fileSize);
-
-    std::vector<uint8_t> fileData(fileSize);
-    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
-      LOGE("Failed to read KSS file");
-      fclose(f);
-      env->ReleaseStringUTFChars(jpath, path);
-      return JNI_FALSE;
-    }
-    fclose(f);
+    const size_t fileSize = fileData.size();
+    LOGD("KSS file size: %zu bytes", fileSize);
 
     // Get filename for KSS_bin2kss (it uses filename for MBM detection)
     const char *filename = strrchr(path, '/');
     filename = filename ? filename + 1 : path;
 
-    env->ReleaseStringUTFChars(jpath, path);
-
-    // Log first 16 bytes for debugging
-    LOGD("KSS header: %02X %02X %02X %02X %02X %02X %02X %02X", fileData[0],
-         fileData[1], fileData[2], fileData[3], fileData[4], fileData[5],
-         fileData[6], fileData[7]);
+    if (fileData.size() >= 8) {
+      LOGD("KSS header: %02X %02X %02X %02X %02X %02X %02X %02X", fileData[0],
+           fileData[1], fileData[2], fileData[3], fileData[4], fileData[5],
+           fileData[6], fileData[7]);
+    }
 
     // Create KSS object using KSS_bin2kss which properly parses the header
     // KSS_bin2kss handles KSCC, KSSX, MGS, BGM, OPX, MPK, MBM formats
     gKss = KSS_bin2kss(fileData.data(), fileSize, filename);
+    env->ReleaseStringUTFChars(jpath, path);
     if (!gKss) {
       LOGE("KSS_bin2kss failed");
       return JNI_FALSE;
@@ -637,6 +710,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
 
     // Reset and start first track
     KSSPLAY_reset(gKssPlay, gKssTrackIndex, 0); // track, cpu_speed=0 (auto)
+    gKssCurrentSample = 0;
 
     gPlayerType = PlayerType::LIBKSS;
     LOGD("nOpen: libkss success, %d tracks (min=%d, max=%d), sampleRate=%u, "
@@ -651,28 +725,16 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     LOGD("Detected tracker format: %s", path);
 
     // Read the entire file into memory for libopenmpt
-    FILE *f = fopen(path, "rb");
+    std::vector<char> fileData;
+    bool readOk = readWholeFile(path, fileData);
     env->ReleaseStringUTFChars(jpath, path);
-
-    if (!f) {
+    if (!readOk) {
       LOGE("Failed to open tracker file");
       return JNI_FALSE;
     }
 
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    std::vector<char> fileData(fileSize);
-    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
-      LOGE("Failed to read tracker file");
-      fclose(f);
-      return JNI_FALSE;
-    }
-    fclose(f);
-
     gOpenmptModule = openmpt_module_create_from_memory2(
-        fileData.data(), fileSize, openmpt_log_func_silent, nullptr,
+        fileData.data(), fileData.size(), openmpt_log_func_silent, nullptr,
         openmpt_error_func_ignore, nullptr, nullptr, nullptr, nullptr);
 
     if (!gOpenmptModule) {
@@ -730,32 +792,22 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     std::string musFilePath = path;
 
     // Read the entire file into memory for libMusDoom
-    FILE *f = fopen(path, "rb");
+    std::vector<uint8_t> musBytes;
+    bool readOk = readWholeFile(path, musBytes);
     env->ReleaseStringUTFChars(jpath, path);
-
-    if (!f) {
+    if (!readOk) {
       LOGE("Failed to open MUS file: %s", musFilePath.c_str());
       return JNI_FALSE;
     }
-
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    LOGD("MUS file size: %ld bytes", fileSize);
-
-    gMusDoomData.resize(fileSize);
-    if (fread(gMusDoomData.data(), 1, fileSize, f) != (size_t)fileSize) {
-      LOGE("Failed to read MUS file");
-      fclose(f);
-      gMusDoomData.clear();
-      return JNI_FALSE;
-    }
-    fclose(f);
+    gMusDoomData = std::move(musBytes);
+    LOGD("MUS file size: %zu bytes", gMusDoomData.size());
 
     // Log first 16 bytes for debugging (MUS header starts with "MUS\x1a")
-    LOGD("MUS header: %02X %02X %02X %02X %02X %02X %02X %02X", gMusDoomData[0],
-         gMusDoomData[1], gMusDoomData[2], gMusDoomData[3], gMusDoomData[4],
-         gMusDoomData[5], gMusDoomData[6], gMusDoomData[7]);
+    if (gMusDoomData.size() >= 8) {
+      LOGD("MUS header: %02X %02X %02X %02X %02X %02X %02X %02X", gMusDoomData[0],
+           gMusDoomData[1], gMusDoomData[2], gMusDoomData[3], gMusDoomData[4],
+           gMusDoomData[5], gMusDoomData[6], gMusDoomData[7]);
+    }
 
     // Convert MUS -> MIDI in memory (avoids libMusDoom playback hangs).
     MEMFILE *musIn = mem_fopen_read(gMusDoomData.data(), gMusDoomData.size());
@@ -858,10 +910,6 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nPlay(JNIEnv *env, jclass cls) {
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     gVgmPlayer->SetSampleRate(gSampleRate);
     gVgmPlayer->Start();
-  }
-  if (gPlayerType == PlayerType::LIBPSF) {
-    std::lock_guard<std::mutex> lock(gPsfStateMutex);
-    gPsfPlaybackPos = 0;
   }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     musdoom_resume(gMusDoomPlayer);
@@ -1056,9 +1104,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     }
   }
   if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
-    // Tracker modules don't have a fixed duration - they loop
-    // Return a reasonable default (3 minutes)
-    return (jlong)180 * gSampleRate;
+    double seconds = openmpt_module_get_duration_seconds(gOpenmptModule);
+    return seconds > 0 ? static_cast<jlong>(seconds * gSampleRate) : 0;
   }
   if (gPlayerType == PlayerType::LIBKSS && gKss) {
     // KSS files may have info about track duration
@@ -1115,10 +1162,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     return (jlong)(seconds * gSampleRate);
   }
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
-    // KSS doesn't have a direct position function
-    // We track position via decoded_length which is updated during calc
-    // Return 0 for now - proper position tracking would need a timer
-    return 0;
+    return static_cast<jlong>(gKssCurrentSample);
   }
   if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
     double positionSeconds = adl_positionTell(gAdlPlayer);
@@ -1138,6 +1182,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
     JNIEnv *env, jclass cls, jlong samplePos) {
+  if (samplePos < 0)
+    samplePos = 0;
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
     gVgmPlayer->Seek(PLAYPOS_SAMPLE, (UINT32)samplePos);
   }
@@ -1167,12 +1213,6 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
   }
   // KSS doesn't have a direct seek function - need to reset and fast-forward
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
-    // Get current position in samples
-    UINT64 currentPos = 0;
-    if (gVgmPlayer) {
-      // We track position manually for KSS since there's no getter
-    }
-
     // For KSS, we need to reset and fast-forward to the target position
     // This is expensive but the only way to seek in KSS
     LOGD("KSS seek to %lld samples (reset and fast-forward)",
@@ -1190,6 +1230,7 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
       KSSPLAY_calc_silent(gKssPlay, toCalc);
       remaining -= toCalc;
     }
+    gKssCurrentSample = static_cast<uint64_t>(samplePos);
   }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     uint32_t positionMs = (uint32_t)(samplePos * 1000 / gSampleRate);
@@ -1204,10 +1245,12 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
  */
 JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     JNIEnv *env, jclass cls, jshortArray buffer, jint frames) {
-  if (frames <= 0)
+  if (!buffer || frames <= 0 || env->GetArrayLength(buffer) < frames * 2)
     return 0;
 
   jshort *dst = (jshort *)env->GetShortArrayElements(buffer, nullptr);
+  if (!dst)
+    return 0;
   jint written = 0;
 
   if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
@@ -1277,6 +1320,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     // libkss outputs stereo interleaved 16-bit
     KSSPLAY_calc(gKssPlay, dst, frames);
     written = frames;
+    gKssCurrentSample += static_cast<uint64_t>(frames);
 
     // Debug: log first few samples occasionally
     static int kssLogCounter = 0;
@@ -1308,21 +1352,11 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       }
     }
   } else if (gPlayerType == PlayerType::LIBPSF) {
-    // Lock-free read: gPsfCommittedBytes is advanced by sexyd_update AFTER
-    // each insert(), so it only ever points to fully-written data.
-    // The vector is pre-reserved so it never reallocates — the raw data
-    // pointer is stable for the lifetime of the track.
     static int psfZeroLogCounter = 0;
-    size_t committed = gPsfCommittedBytes.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> lock(gPsfStateMutex);
+    size_t committed = gPsfAudioCachePtr ? gPsfAudioCachePtr->size() : 0;
     size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
-    const uint8_t *rawBuf = nullptr;
-    {
-      // One brief lock just to read the raw pointer (zero-copy, fast).
-      std::lock_guard<std::mutex> lock(gPsfStateMutex);
-      if (gPsfAudioCachePtr && committed > 0)
-        rawBuf = gPsfAudioCachePtr->data();
-    }
-    if (!rawBuf || committed <= currentPos + 4) {
+    if (!gPsfAudioCachePtr || committed < currentPos + 4) {
       if (psfZeroLogCounter++ % 100 == 0)
         LOGD("PSF underrun: committed=%zu pos=%zu", committed, currentPos);
       written = 0;
@@ -1332,8 +1366,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       jint framesToCopy =
           (framesAvailable >= (size_t)frames) ? frames : (jint)framesAvailable;
       if (framesToCopy > 0) {
-        // Safe: rawBuf is stable (pre-reserved), bytes are committed.
-        memcpy(dst, rawBuf + currentPos, (size_t)framesToCopy * 4);
+        memcpy(dst, gPsfAudioCachePtr->data() + currentPos,
+               (size_t)framesToCopy * 4);
 
         for (jint i = 0; i < framesToCopy; i++) {
           int16_t l = dst[i * 2];
@@ -1436,6 +1470,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
     JNIEnv *env, jclass cls, jfloatArray outMagnitudes) {
+  if (!outMagnitudes || env->GetArrayLength(outMagnitudes) < FFT_SIZE / 2)
+    return;
   int n = FFT_SIZE;
   std::vector<Complex> a(n);
 
@@ -1525,6 +1561,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelSpectrums(JNIEnv *env,
     return nullptr;
 
   float *levels = env->GetFloatArrayElements(result, nullptr);
+  if (!levels)
+    return result;
   int idx = 0;
   auto &wave = gKssPlay->ch_wave;
   int w_idx = wave.wave_idx;
@@ -1608,7 +1646,8 @@ static std::string utf16le_to_utf8(const UINT8 *data, size_t byteLen) {
  */
 static std::string readVgmGd3Tags(const UINT8 *fileData,
                                   const VGM_HEADER *hdr) {
-  if (!hdr->gd3Ofs || hdr->gd3Ofs >= hdr->eofOfs) {
+  if (!fileData || !hdr || !hdr->gd3Ofs || hdr->gd3Ofs > hdr->eofOfs ||
+      static_cast<uint64_t>(hdr->gd3Ofs) + 12 > hdr->eofOfs) {
     return "";
   }
 
@@ -1618,13 +1657,15 @@ static std::string readVgmGd3Tags(const UINT8 *fileData,
   }
 
   // GD3 structure: "Gd3 " (4) + version (4) + data size (4) + data
-  UINT32 dataSize = *(UINT32 *)(&fileData[hdr->gd3Ofs + 8]);
+  const UINT8 *sizeBytes = &fileData[hdr->gd3Ofs + 8];
+  UINT32 dataSize = static_cast<UINT32>(sizeBytes[0]) |
+                    (static_cast<UINT32>(sizeBytes[1]) << 8) |
+                    (static_cast<UINT32>(sizeBytes[2]) << 16) |
+                    (static_cast<UINT32>(sizeBytes[3]) << 24);
   UINT32 dataStart = hdr->gd3Ofs + 12;
-  UINT32 dataEnd = dataStart + dataSize;
-
-  if (dataEnd > hdr->eofOfs) {
-    dataEnd = hdr->eofOfs;
-  }
+  UINT32 dataEnd = static_cast<UINT32>(std::min<uint64_t>(
+      static_cast<uint64_t>(hdr->eofOfs),
+      static_cast<uint64_t>(dataStart) + dataSize));
 
   // GD3 tag order (all UTF-16LE, null-terminated):
   // 0: Track title (English)
@@ -1650,15 +1691,21 @@ static std::string readVgmGd3Tags(const UINT8 *fileData,
   for (int i = 0; i < tagCount && pos < dataEnd; i++) {
     // Find null terminator for this string
     UINT32 start = pos;
+    bool terminated = false;
     while (pos + 1 < dataEnd) {
       UINT16 ch = fileData[pos] | (fileData[pos + 1] << 8);
       pos += 2;
-      if (ch == 0)
+      if (ch == 0) {
+        terminated = true;
         break;
+      }
     }
 
     // Convert UTF-16LE to UTF-8
-    std::string value = utf16le_to_utf8(&fileData[start], pos - start - 2);
+    UINT32 valueEnd = terminated ? pos - 2 : pos;
+    if (valueEnd < start)
+      return "";
+    std::string value = utf16le_to_utf8(&fileData[start], valueEnd - start);
 
     // Add to result
     result += tagKeys[i];
@@ -1683,7 +1730,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
 
     if (hdr && fileData) {
       std::string tags = readVgmGd3Tags(fileData, hdr);
-      return env->NewStringUTF(tags.c_str());
+      return newMetadataString(env, tags, "UTF-8");
     }
     return env->NewStringUTF("");
   }
@@ -1760,7 +1807,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
 
     gme_free_info(info);
-    return env->NewStringUTF(s.c_str());
+    return newMetadataString(env, s, "Shift_JIS");
   }
 
   // Handle tracker formats via libopenmpt
@@ -1839,7 +1886,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     s += "|||";
 
-    return env->NewStringUTF(s.c_str());
+    return newMetadataString(env, s, "UTF-8");
   }
 
   // Handle KSS format via libkss
@@ -1923,7 +1970,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     s += "|||";
 
-    return env->NewStringUTF(s.c_str());
+    return newMetadataString(env, s, "Shift_JIS");
   }
 
   // Handle PSF format via libpsf
@@ -1992,7 +2039,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += gPsfInfo->comment ? gPsfInfo->comment : "";
     s += "|||";
 
-    return env->NewStringUTF(s.c_str());
+    return newMetadataString(env, s, "ISO-8859-1");
   }
 
   return env->NewStringUTF("");
@@ -2051,32 +2098,18 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
 
   // Check if this is a KSS format
   if (isKssFormat(path)) {
-    // Read the entire file into memory for libkss
-    FILE *f = fopen(path, "rb");
-
-    if (!f) {
+    std::vector<uint8_t> fileData;
+    if (!readWholeFile(path, fileData)) {
       env->ReleaseStringUTFChars(jpath, path);
       return 0;
     }
-
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    std::vector<uint8_t> fileData(fileSize);
-    if (fread(fileData.data(), 1, fileSize, f) != (size_t)fileSize) {
-      fclose(f);
-      env->ReleaseStringUTFChars(jpath, path);
-      return 0;
-    }
-    fclose(f);
 
     // Get filename for KSS_bin2kss
     const char *filename = strrchr(path, '/');
     filename = filename ? filename + 1 : path;
 
     // Create KSS object
-    KSS *tempKss = KSS_bin2kss(fileData.data(), fileSize, filename);
+    KSS *tempKss = KSS_bin2kss(fileData.data(), fileData.size(), filename);
     if (!tempKss) {
       env->ReleaseStringUTFChars(jpath, path);
       return 0;
@@ -2106,20 +2139,11 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
   // adl_totalTimeLength() which parses MIDI tempo events without rendering
   // any audio, so this is fast enough to call once per track during import.
   if (isMusFormat(path)) {
-    FILE *f = fopen(path, "rb");
+    std::vector<uint8_t> musData;
+    bool readOk = readWholeFile(path, musData);
     env->ReleaseStringUTFChars(jpath, path);
-    if (!f)
+    if (!readOk)
       return (jlong)180 * gSampleRate;
-
-    fseek(f, 0, SEEK_END);
-    long fileSize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    std::vector<uint8_t> musData(fileSize);
-    if (fread(musData.data(), 1, fileSize, f) != (size_t)fileSize) {
-      fclose(f);
-      return (jlong)180 * gSampleRate;
-    }
-    fclose(f);
 
     MEMFILE *musIn = mem_fopen_read(musData.data(), musData.size());
     MEMFILE *midiOut = mem_fopen_write();
@@ -2129,10 +2153,15 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
     size_t midiSize = 0;
     if (!convertError)
       mem_get_buf(midiOut, &midiBuf, &midiSize);
+    std::vector<uint8_t> midiData;
+    if (midiBuf && midiSize > 0) {
+      const auto *begin = static_cast<const uint8_t *>(midiBuf);
+      midiData.assign(begin, begin + midiSize);
+    }
     mem_fclose(musIn);
     mem_fclose(midiOut);
 
-    if (convertError || !midiBuf || midiSize == 0)
+    if (convertError || midiData.empty())
       return (jlong)180 * gSampleRate;
 
     ADL_MIDIPlayer *tempPlayer = adl_init(gSampleRate);
@@ -2140,7 +2169,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
       return (jlong)180 * gSampleRate;
 
     adl_setBank(tempPlayer, 14); // DMX bank — same as nOpen()
-    int res = adl_openData(tempPlayer, midiBuf, (unsigned long)midiSize);
+    int res = adl_openData(tempPlayer, midiData.data(),
+                           static_cast<unsigned long>(midiData.size()));
     if (res != 0) {
       adl_close(tempPlayer);
       return (jlong)180 * gSampleRate;
@@ -2186,7 +2216,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackLengthDirect(JNIEnv *env,
 
   // Check if this is a PSF format
   if (isPsfFormat(path)) {
-    PSFINFO *info = sexy_load(const_cast<char *>(path));
+    // Metadata-only load: never initializes or mutates the global PSX emulator.
+    PSFINFO *info = sexy_getpsfinfo(const_cast<char *>(path));
     env->ReleaseStringUTFChars(jpath, path);
     if (info) {
       // PSFINFO.length is in milliseconds, convert to samples
@@ -2704,11 +2735,14 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsChannelMuted(JNIEnv *env, jclass cls,
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetChannelMuted(
     JNIEnv *env, jclass cls, jint index, jboolean muted) {
   if (gPlayerType == PlayerType::LIBGME && gGmePlayer) {
+    const int voiceCount = gme_voice_count(gGmePlayer);
+    if (index < 0 || index >= voiceCount)
+      return;
     gme_mute_voice(gGmePlayer, index, muted ? 1 : 0);
-    if (index >= 0 && index < gGmeMutedChannels.size()) {
+    if (static_cast<size_t>(index) < gGmeMutedChannels.size()) {
       gGmeMutedChannels[index] = muted;
-    } else if (index >= gGmeMutedChannels.size()) {
-      gGmeMutedChannels.resize(index + 1, false);
+    } else {
+      gGmeMutedChannels.resize(static_cast<size_t>(voiceCount), false);
       gGmeMutedChannels[index] = muted;
     }
   } else if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
@@ -2841,6 +2875,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSetTrack(
     if (actualTrack >= gKss->trk_min && actualTrack <= gKss->trk_max) {
       KSSPLAY_reset(gKssPlay, actualTrack, 0);
       gKssTrackIndex = actualTrack;
+      gKssCurrentSample = 0;
       LOGD("nSetTrack: KSS track set to %d", actualTrack);
       return JNI_TRUE;
     }
@@ -2943,25 +2978,17 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackCountDirect(JNIEnv *env,
   filename = filename ? filename + 1 : path;
 
   // Read file into memory
-  FILE *f = fopen(path, "rb");
-  env->ReleaseStringUTFChars(jpath, path);
-
-  if (!f) {
+  std::vector<uint8_t> fileData;
+  if (!readWholeFile(path, fileData)) {
+    env->ReleaseStringUTFChars(jpath, path);
     LOGE("Failed to open KSS file for track count");
     return 1;
   }
 
-  fseek(f, 0, SEEK_END);
-  long fileSize = ftell(f);
-  fseek(f, 0, SEEK_SET);
-
-  std::vector<uint8_t> fileData(fileSize);
-  fread(fileData.data(), 1, fileSize, f);
-  fclose(f);
-
   // Create temporary KSS object using KSS_bin2kss which properly parses
   // headers
-  KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
+  KSS *kss = KSS_bin2kss(fileData.data(), fileData.size(), filename);
+  env->ReleaseStringUTFChars(jpath, path);
   if (!kss) {
     LOGE("Failed to create KSS object for track count");
     return 1;
@@ -3004,24 +3031,16 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(JNIEnv *env,
   filename = filename ? filename + 1 : path;
 
   // Read file into memory
-  FILE *f = fopen(path, "rb");
-  env->ReleaseStringUTFChars(jpath, path);
-
-  if (!f) {
+  std::vector<uint8_t> fileData;
+  if (!readWholeFile(path, fileData)) {
+    env->ReleaseStringUTFChars(jpath, path);
     return result;
   }
 
-  fseek(f, 0, SEEK_END);
-  long fileSize = ftell(f);
-  fseek(f, 0, SEEK_SET);
-
-  std::vector<uint8_t> fileData(fileSize);
-  fread(fileData.data(), 1, fileSize, f);
-  fclose(f);
-
   // Create temporary KSS object using KSS_bin2kss which properly parses
   // headers
-  KSS *kss = KSS_bin2kss(fileData.data(), fileSize, filename);
+  KSS *kss = KSS_bin2kss(fileData.data(), fileData.size(), filename);
+  env->ReleaseStringUTFChars(jpath, path);
   if (!kss) {
     return result;
   }

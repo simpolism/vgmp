@@ -31,6 +31,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.databinding.ActivityMainBinding
 import org.vlessert.vgmp.engine.VgmEngine
@@ -48,6 +49,8 @@ class MainActivity : AppCompatActivity() {
     private var isAnalyzerVisible = false
     private var currentTabId = R.id.nav_browse
     private var navigationInsetBottom = 0
+    private var playbackInfoJob: Job? = null
+    private var spectrumJob: Job? = null
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -55,7 +58,8 @@ class MainActivity : AppCompatActivity() {
             val svc = localBinder.getService()
             playbackService = svc
             serviceBound = true
-            lifecycleScope.launch {
+            playbackInfoJob?.cancel()
+            playbackInfoJob = lifecycleScope.launch {
                 svc.playbackInfo.collectLatest {
                     updateMiniPlayer()
                 }
@@ -69,6 +73,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            playbackInfoJob?.cancel()
+            spectrumJob?.cancel()
             playbackService = null
             serviceBound = false
         }
@@ -185,7 +191,8 @@ class MainActivity : AppCompatActivity() {
     
     private fun startSpectrumObserver() {
         val svc = playbackService ?: return
-        lifecycleScope.launch {
+        spectrumJob?.cancel()
+        spectrumJob = lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 svc.spectrum.collect { magnitudes ->
                     if (isAnalyzerVisible) {
@@ -306,7 +313,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startPlaybackService() {
         val intent = Intent(this, VgmPlaybackService::class.java)
-        startForegroundService(intent)
+        startService(intent)
         bindService(intent, serviceConnection, BIND_AUTO_CREATE)
     }
 

@@ -19,6 +19,7 @@ import android.widget.Toast
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentNowPlayingBinding
@@ -43,6 +44,9 @@ class NowPlayingFragment : Fragment() {
     // Soloed channels tracking
     private val soloedChannels = mutableSetOf<Int>()
     private var channelControlsTrackKey: String? = null
+    private var volumeControlsTrackKey: String? = null
+    private var observationJob: Job? = null
+    private var observedService: VgmPlaybackService? = null
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -83,28 +87,31 @@ class NowPlayingFragment : Fragment() {
 
     private fun observePlaybackInfo() {
         val svc = service ?: return
-        val view = view ?: return
-        viewLifecycleOwner.lifecycleScope.launch {
-            svc.playbackInfo.collectLatest { info ->
-                updateUI()
-                // Update duration display from live duration
-                if (info.endlessLoop) {
-                    binding.tvTotalTime.text = "∞"
-                } else if (info.durationMs > 0) {
-                    binding.tvTotalTime.text = formatTime(info.durationMs)
+        if (observedService === svc && observationJob?.isActive == true) return
+        observedService = svc
+        observationJob?.cancel()
+        observationJob = viewLifecycleOwner.lifecycleScope.launch {
+            launch {
+                svc.playbackInfo.collectLatest { info ->
+                    updateUI()
+                    if (info.endlessLoop) {
+                        binding.tvTotalTime.text = "∞"
+                    } else if (info.durationMs > 0) {
+                        binding.tvTotalTime.text = formatTime(info.durationMs)
+                        binding.seekBar.max = info.durationMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                    }
+                    updateEndlessLoopButton()
                 }
-                updateEndlessLoopButton()
             }
-        }
-
-        viewLifecycleOwner.lifecycleScope.launch {
-            svc.channelSpectrums.collectLatest { spectrums ->
-                updateChannelSpectrums(spectrums)
+            launch {
+                svc.channelSpectrums.collectLatest { spectrums ->
+                    updateChannelSpectrums(spectrums)
+                }
             }
         }
     }
 
-    private fun updateChannelSpectrums(spectrums: FloatArray?) {
+    private suspend fun updateChannelSpectrums(spectrums: FloatArray?) {
         val container = binding.channelsMeterContainer
         if (spectrums == null || spectrums.isEmpty()) {
             container.visibility = View.GONE
@@ -119,27 +126,13 @@ class NowPlayingFragment : Fragment() {
         // Dynamically add views if count doesn't match
         if (container.childCount != channelCount) {
             container.removeAllViews()
-            
-            viewLifecycleOwner.lifecycleScope.launch {
-                val names = mutableListOf<String>()
-                for (i in 0 until channelCount) {
-                    names.add(VgmEngine.getChannelName(i))
-                }
-                
-                // Construct Grid Layout
-                for (i in 0 until channelCount) {
-                    val view = layoutInflater.inflate(R.layout.item_vu_meter, container, false)
-                    val tvName = view.findViewById<TextView>(R.id.tv_channel_name)
-                    tvName.text = names[i]
-                    container.addView(view)
-                }
-                
-                // Initialize spectrums
-                for (i in 0 until channelCount) {
-                    val view = container.getChildAt(i)
-                    val spectrumView = view.findViewById<ChannelSpectrumView>(R.id.channel_spectrum)
-                    spectrumView.setSpectrum(spectrums, i * BANDS_PER_CH)
-                }
+            val names = List(channelCount) { VgmEngine.getChannelName(it) }
+            for (i in 0 until channelCount) {
+                val row = layoutInflater.inflate(R.layout.item_vu_meter, container, false)
+                row.findViewById<TextView>(R.id.tv_channel_name).text = names[i]
+                container.addView(row)
+                row.findViewById<ChannelSpectrumView>(R.id.channel_spectrum)
+                    .setSpectrum(spectrums, i * BANDS_PER_CH)
             }
         } else {
             // Update existing views
@@ -232,10 +225,7 @@ class NowPlayingFragment : Fragment() {
                 // Don't allow seeking in endless loop mode
                 if (service?.getEndlessLoop() == true) return
                 if (fromUser) {
-                    val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
-                    if (durMs > 0) {
-                        binding.tvCurrentTime.text = formatTime(progress * durMs / 100L)
-                    }
+                    binding.tvCurrentTime.text = formatTime(progress.toLong())
                 }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) { 
@@ -247,11 +237,8 @@ class NowPlayingFragment : Fragment() {
                 // Don't allow seeking in endless loop mode
                 if (service?.getEndlessLoop() == true) return
                 isSeeking = false
-                val durMs = service?.playbackInfo?.value?.durationMs ?: 0L
-                if (durMs > 0) {
-                    val seekMs = (seekBar?.progress ?: 0) * durMs / 100L
-                    service?.getMediaSession()?.controller?.transportControls?.seekTo(seekMs)
-                }
+                val seekMs = (seekBar?.progress ?: 0).toLong()
+                service?.getMediaSession()?.controller?.transportControls?.seekTo(seekMs)
             }
         })
     }
@@ -507,12 +494,16 @@ class NowPlayingFragment : Fragment() {
         val header = binding.tvSoundChipsHeader
         
         val count = VgmEngine.getDeviceCount()
+        val track = service?.currentTrack
+        val trackKey = track?.let { "${it.uri}#${it.archiveEntry}#${it.subtrackIndex}" }
+        val trackChanged = trackKey != volumeControlsTrackKey
+        volumeControlsTrackKey = trackKey
         
         // Show/hide header based on whether there are chips
         header.visibility = if (count > 0) android.view.View.VISIBLE else android.view.View.GONE
         
         // Only clear and rebuild if count changed or container is empty
-        if (container.childCount != count) {
+        if (trackChanged || container.childCount != count) {
             container.removeAllViews()
             for (i in 0 until count) {
                 val name = VgmEngine.getDeviceName(i)
@@ -542,7 +533,8 @@ class NowPlayingFragment : Fragment() {
     private suspend fun updateChannelControls() {
         val track = service?.currentTrack
         val trackKey = track?.let { "${it.uri}#${it.archiveEntry}#${it.subtrackIndex}" }
-        if (trackKey != channelControlsTrackKey) {
+        val trackChanged = trackKey != channelControlsTrackKey
+        if (trackChanged) {
             channelControlsTrackKey = trackKey
             soloedChannels.clear()
         }
@@ -556,7 +548,7 @@ class NowPlayingFragment : Fragment() {
         header.visibility = if (count > 0) android.view.View.VISIBLE else android.view.View.GONE
         
         // Only clear and rebuild if count changed or container is empty
-        if (container.childCount != count) {
+        if (trackChanged || container.childCount != count) {
             container.removeAllViews()
             for (i in 0 until count) {
                 val name = VgmEngine.getChannelName(i)
@@ -666,8 +658,8 @@ class NowPlayingFragment : Fragment() {
                 if (endlessLoop) {
                     binding.tvCurrentTime.text = formatTime(posMs)
                 } else if (durMs > 0 && !isSeeking) {
-                    val pct = (posMs * 100L / durMs).toInt().coerceIn(0, 100)
-                    binding.seekBar.progress = pct
+                    binding.seekBar.max = durMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                    binding.seekBar.progress = posMs.coerceIn(0L, binding.seekBar.max.toLong()).toInt()
                     binding.tvCurrentTime.text = formatTime(posMs)
                 }
                 updatePlayPauseButton()
@@ -683,6 +675,9 @@ class NowPlayingFragment : Fragment() {
 
     override fun onDestroyView() {
         handler.removeCallbacksAndMessages(null)
+        observationJob?.cancel()
+        observationJob = null
+        observedService = null
         super.onDestroyView()
         _binding = null
     }

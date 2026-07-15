@@ -44,6 +44,8 @@ class PlaylistsFragment : Fragment() {
     private var currentTrack: TrackRef? = null
     private var touchHelper: ItemTouchHelper? = null
     private var pendingExport: Playlist? = null
+    private var queueDragInProgress = false
+    private var queueRefreshPending = false
 
     private val chooseExportFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         val playlist = pendingExport
@@ -94,7 +96,13 @@ class PlaylistsFragment : Fragment() {
         val svc = service ?: return
         if (serviceJob?.isActive == true) return
         serviceJob = viewLifecycleOwner.lifecycleScope.launch {
-            launch { svc.queueTracks.collect { if (selection == Selection.Queue) refresh() else refreshRootCounts() } }
+            launch {
+                svc.queueTracks.collect {
+                    if (selection == Selection.Queue) {
+                        if (queueDragInProgress) queueRefreshPending = true else refresh()
+                    } else refreshRootCounts()
+                }
+            }
             launch { svc.playbackInfo.collect { currentTrack = it.track; refreshVisibleTrackMarkers() } }
         }
     }
@@ -184,25 +192,50 @@ class PlaylistsFragment : Fragment() {
             }
         )
         binding.recyclerPlaylists.adapter = adapter
-        adapter.submitList(tracks)
+        adapter.replaceItems(tracks)
+        var dragStart = RecyclerView.NO_POSITION
+        var dragEnd = RecyclerView.NO_POSITION
         touchHelper = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
             ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0
         ) {
+            override fun onSelectedChanged(viewHolder: RecyclerView.ViewHolder?, actionState: Int) {
+                super.onSelectedChanged(viewHolder, actionState)
+                if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
+                    queueDragInProgress = queue
+                    queueRefreshPending = false
+                    dragStart = viewHolder?.bindingAdapterPosition ?: RecyclerView.NO_POSITION
+                    dragEnd = dragStart
+                }
+            }
+
             override fun onMove(rv: RecyclerView, source: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
                 val from = source.bindingAdapterPosition
                 val to = target.bindingAdapterPosition
-                if (from < 0 || to < 0) return false
-                if (queue) service?.moveQueueItem(from, to)
-                val mutableTracks = adapter.currentList.toMutableList()
-                mutableTracks.add(to, mutableTracks.removeAt(from))
-                if (!queue && playlist != null) {
-                    PlaylistStore.replaceTracks(
-                        requireContext(), playlist.id, mutableTracks.map(PlaylistTrack::from)
-                    )
-                }
-                adapter.submitList(mutableTracks)
+                if (!adapter.moveItem(from, to)) return false
+                dragEnd = to
                 return true
             }
+
+            override fun clearView(rv: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
+                super.clearView(rv, viewHolder)
+                val moved = dragStart != RecyclerView.NO_POSITION && dragEnd != RecyclerView.NO_POSITION &&
+                    dragStart != dragEnd
+                queueDragInProgress = false
+                if (moved) {
+                    if (queue) service?.moveQueueItem(dragStart, dragEnd)
+                    else if (playlist != null) {
+                        PlaylistStore.replaceTracks(
+                            requireContext(), playlist.id, adapter.snapshot().map(PlaylistTrack::from)
+                        )
+                    }
+                }
+                val needsPostedRefresh = (!queue && moved) || (queue && queueRefreshPending && !moved)
+                dragStart = RecyclerView.NO_POSITION
+                dragEnd = RecyclerView.NO_POSITION
+                queueRefreshPending = false
+                if (needsPostedRefresh) rv.post { if (_binding != null) refresh() }
+            }
+
             override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) = Unit
         }).also { it.attachToRecyclerView(binding.recyclerPlaylists) }
     }
@@ -240,6 +273,8 @@ class PlaylistsFragment : Fragment() {
     }
 
     override fun onDestroyView() {
+        queueDragInProgress = false
+        queueRefreshPending = false
         serviceJob?.cancel()
         touchHelper?.attachToRecyclerView(null)
         super.onDestroyView()
@@ -269,13 +304,28 @@ class PlaylistsFragment : Fragment() {
         private val current: () -> TrackRef?,
         private val onClick: (Int) -> Unit,
         private val onLongClick: (Int) -> Unit
-    ) : ListAdapter<TrackRef, TextHolder>(object : DiffUtil.ItemCallback<TrackRef>() {
-        override fun areItemsTheSame(a: TrackRef, b: TrackRef) = a == b
-        override fun areContentsTheSame(a: TrackRef, b: TrackRef) = a == b
-    }) {
+    ) : RecyclerView.Adapter<TextHolder>() {
+        private val items = mutableListOf<TrackRef>()
+
+        fun replaceItems(tracks: List<TrackRef>) {
+            items.clear()
+            items.addAll(tracks)
+            notifyDataSetChanged()
+        }
+
+        fun moveItem(from: Int, to: Int): Boolean {
+            if (from !in items.indices || to !in items.indices) return false
+            items.add(to, items.removeAt(from))
+            notifyItemMoved(from, to)
+            return true
+        }
+
+        fun snapshot(): List<TrackRef> = items.toList()
+
+        override fun getItemCount() = items.size
         override fun onCreateViewHolder(parent: ViewGroup, type: Int) = TextHolder.create(parent)
         override fun onBindViewHolder(holder: TextHolder, position: Int) {
-            val track = getItem(position)
+            val track = items[position]
             holder.text.text = "${if (track == current()) "▶" else "♪"}  ${track.title}"
             holder.text.setOnClickListener { onClick(holder.bindingAdapterPosition) }
             holder.text.setOnLongClickListener { onLongClick(holder.bindingAdapterPosition); true }

@@ -31,6 +31,8 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import org.vlessert.vgmp.databinding.ActivityMainBinding
@@ -51,6 +53,7 @@ class MainActivity : AppCompatActivity() {
     private var navigationInsetBottom = 0
     private var restoreAnalyzerWhenReady = false
     private var playbackInfoJob: Job? = null
+    private var miniProgressJob: Job? = null
     private var spectrumJob: Job? = null
     
     private val serviceConnection = object : ServiceConnection {
@@ -66,6 +69,15 @@ class MainActivity : AppCompatActivity() {
                     if (restoreAnalyzerWhenReady && info.track != null) {
                         restoreAnalyzerWhenReady = false
                         showAnalyzer()
+                    }
+                }
+            }
+            miniProgressJob?.cancel()
+            miniProgressJob = lifecycleScope.launch {
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    while (isActive) {
+                        if (currentTabId != R.id.nav_player && svc.playing) updateMiniPlayer()
+                        delay(MINI_PROGRESS_INTERVAL_MS)
                     }
                 }
             }
@@ -87,6 +99,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             playbackInfoJob?.cancel()
+            miniProgressJob?.cancel()
             spectrumJob?.cancel()
             playbackService = null
             serviceBound = false
@@ -437,6 +450,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val STATE_TAB = "selected_tab"
         private const val STATE_ANALYZER = "analyzer_visible"
+        private const val MINI_PROGRESS_INTERVAL_MS = 500L
     }
 }
 

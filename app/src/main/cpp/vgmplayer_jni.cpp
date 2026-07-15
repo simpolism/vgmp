@@ -163,17 +163,25 @@ static bool isValidUtf8(const std::string &s) {
   const auto *p = reinterpret_cast<const unsigned char *>(s.data());
   size_t i = 0;
   while (i < s.size()) {
-    unsigned char c = p[i++];
+    const unsigned char c = p[i++];
     if (c < 0x80)
       continue;
-    int continuation = c >= 0xC2 && c <= 0xDF ? 1
-                     : c >= 0xE0 && c <= 0xEF ? 2
-                     : c >= 0xF0 && c <= 0xF4 ? 3 : -1;
+    const int continuation = c >= 0xC2 && c <= 0xDF ? 1
+                           : c >= 0xE0 && c <= 0xEF ? 2
+                           : c >= 0xF0 && c <= 0xF4 ? 3 : -1;
     if (continuation < 0 || i + continuation > s.size())
       return false;
-    for (int n = 0; n < continuation; ++n)
-      if ((p[i++] & 0xC0) != 0x80)
+    const unsigned char firstContinuation = p[i];
+    if ((c == 0xE0 && firstContinuation < 0xA0) ||
+        (c == 0xED && firstContinuation >= 0xA0) ||
+        (c == 0xF0 && firstContinuation < 0x90) ||
+        (c == 0xF4 && firstContinuation >= 0x90))
+      return false;
+    for (int n = 0; n < continuation; ++n) {
+      if ((p[i] & 0xC0) != 0x80)
         return false;
+      ++i;
+    }
   }
   return true;
 }
@@ -182,6 +190,47 @@ static jstring newMetadataString(JNIEnv *env, const std::string &bytes,
                                  const char *fallbackCharset) {
   return newDecodedString(env, bytes,
                           isValidUtf8(bytes) ? "UTF-8" : fallbackCharset);
+}
+
+// Decode one raw metadata field, then convert the Java string back to standard
+// UTF-8 before it is joined with the ASCII tag protocol. Decoding the complete
+// payload at once lets one legacy-encoded field corrupt otherwise-valid UTF-8
+// fields from the same file.
+static std::string metadataFieldUtf8(JNIEnv *env, const char *value,
+                                     const char *fallbackCharset) {
+  if (!value || !value[0])
+    return {};
+  const std::string raw(value);
+  jstring decoded = newMetadataString(env, raw, fallbackCharset);
+  if (!decoded)
+    return isValidUtf8(raw) ? raw : std::string();
+
+  jclass stringClass = env->FindClass("java/lang/String");
+  jmethodID getBytes = stringClass ? env->GetMethodID(
+      stringClass, "getBytes", "(Ljava/lang/String;)[B") : nullptr;
+  jstring utf8 = getBytes ? env->NewStringUTF("UTF-8") : nullptr;
+  jbyteArray encoded = utf8 ? static_cast<jbyteArray>(
+      env->CallObjectMethod(decoded, getBytes, utf8)) : nullptr;
+
+  std::string result;
+  if (!env->ExceptionCheck() && encoded) {
+    const jsize length = env->GetArrayLength(encoded);
+    result.resize(static_cast<size_t>(length));
+    if (length > 0)
+      env->GetByteArrayRegion(encoded, 0, length,
+                              reinterpret_cast<jbyte *>(&result[0]));
+  } else if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+
+  if (encoded)
+    env->DeleteLocalRef(encoded);
+  if (utf8)
+    env->DeleteLocalRef(utf8);
+  if (stringClass)
+    env->DeleteLocalRef(stringClass);
+  env->DeleteLocalRef(decoded);
+  return result;
 }
 
 // Current track index for libgme (NSF can have multiple tracks)
@@ -1606,7 +1655,6 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetChannelSpectrums(JNIEnv *env,
 /**
  * Convert UTF-16LE to UTF-8.
  * Simple implementation for Android where iconv is not available.
- * Handles BMP characters (U+0000 to U+FFFF).
  */
 static std::string utf16le_to_utf8(const UINT8 *data, size_t byteLen) {
   std::string result;
@@ -1614,24 +1662,41 @@ static std::string utf16le_to_utf8(const UINT8 *data, size_t byteLen) {
   const UINT8 *end = data + byteLen;
 
   while (ptr + 1 < end) {
-    UINT16 codeUnit = ptr[0] | (ptr[1] << 8); // UTF-16LE
+    const UINT16 codeUnit = ptr[0] | (ptr[1] << 8); // UTF-16LE
     ptr += 2;
 
     if (codeUnit == 0)
       break; // null terminator
 
-    if (codeUnit < 0x80) {
+    uint32_t codePoint = codeUnit;
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF && ptr + 1 < end) {
+      const UINT16 low = ptr[0] | (ptr[1] << 8);
+      if (low >= 0xDC00 && low <= 0xDFFF) {
+        ptr += 2;
+        codePoint = 0x10000 + ((codeUnit - 0xD800) << 10) + (low - 0xDC00);
+      } else {
+        codePoint = 0xFFFD;
+      }
+    } else if (codeUnit >= 0xD800 && codeUnit <= 0xDFFF) {
+      codePoint = 0xFFFD;
+    }
+
+    if (codePoint < 0x80) {
       // 1-byte UTF-8
-      result += (char)codeUnit;
-    } else if (codeUnit < 0x800) {
+      result += (char)codePoint;
+    } else if (codePoint < 0x800) {
       // 2-byte UTF-8
-      result += (char)(0xC0 | (codeUnit >> 6));
-      result += (char)(0x80 | (codeUnit & 0x3F));
+      result += (char)(0xC0 | (codePoint >> 6));
+      result += (char)(0x80 | (codePoint & 0x3F));
+    } else if (codePoint < 0x10000) {
+      result += (char)(0xE0 | (codePoint >> 12));
+      result += (char)(0x80 | ((codePoint >> 6) & 0x3F));
+      result += (char)(0x80 | (codePoint & 0x3F));
     } else {
-      // 3-byte UTF-8 (BMP characters)
-      result += (char)(0xE0 | (codeUnit >> 12));
-      result += (char)(0x80 | ((codeUnit >> 6) & 0x3F));
-      result += (char)(0x80 | (codeUnit & 0x3F));
+      result += (char)(0xF0 | (codePoint >> 18));
+      result += (char)(0x80 | ((codePoint >> 12) & 0x3F));
+      result += (char)(0x80 | ((codePoint >> 6) & 0x3F));
+      result += (char)(0x80 | (codePoint & 0x3F));
     }
   }
 
@@ -1747,7 +1812,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // TITLE
     s += "TITLE";
     s += "|||";
-    s += info->song ? info->song : "";
+    s += metadataFieldUtf8(env, info->song, "Shift_JIS");
     s += "|||";
 
     // TITLE-JPN (not available in gme)
@@ -1758,7 +1823,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // GAME
     s += "GAME";
     s += "|||";
-    s += info->game ? info->game : "";
+    s += metadataFieldUtf8(env, info->game, "Shift_JIS");
     s += "|||";
 
     // GAME-JPN
@@ -1769,7 +1834,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // SYSTEM
     s += "SYSTEM";
     s += "|||";
-    s += info->system ? info->system : "";
+    s += metadataFieldUtf8(env, info->system, "Shift_JIS");
     s += "|||";
 
     // SYSTEM-JPN
@@ -1780,7 +1845,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // ARTIST
     s += "ARTIST";
     s += "|||";
-    s += info->author ? info->author : "";
+    s += metadataFieldUtf8(env, info->author, "Shift_JIS");
     s += "|||";
 
     // ARTIST-JPN
@@ -1791,23 +1856,23 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // DATE
     s += "DATE";
     s += "|||";
-    s += info->copyright ? info->copyright : "";
+    s += metadataFieldUtf8(env, info->copyright, "Shift_JIS");
     s += "|||";
 
     // ENCODED_BY (dumper)
     s += "ENCODED_BY";
     s += "|||";
-    s += info->dumper ? info->dumper : "";
+    s += metadataFieldUtf8(env, info->dumper, "Shift_JIS");
     s += "|||";
 
     // COMMENT
     s += "COMMENT";
     s += "|||";
-    s += info->comment ? info->comment : "";
+    s += metadataFieldUtf8(env, info->comment, "Shift_JIS");
     s += "|||";
 
     gme_free_info(info);
-    return newMetadataString(env, s, "Shift_JIS");
+    return newDecodedString(env, s, "UTF-8");
   }
 
   // Handle tracker formats via libopenmpt
@@ -1898,12 +1963,12 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     const char *kssTitle = KSS_get_title(gKss);
     if (kssTitle && kssTitle[0]) {
-      s += kssTitle;
+      s += metadataFieldUtf8(env, kssTitle, "Shift_JIS");
     } else if (gKss->info && gKss->info_num > 0) {
       // Try to get track-specific title
       for (uint16_t i = 0; i < gKss->info_num; i++) {
         if (gKss->info[i].song == gKssTrackIndex) {
-          s += gKss->info[i].title;
+          s += metadataFieldUtf8(env, gKss->info[i].title, "Shift_JIS");
           break;
         }
       }
@@ -1918,7 +1983,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // GAME - use KSS title as game name
     s += "GAME";
     s += "|||";
-    s += kssTitle ? kssTitle : "";
+    s += metadataFieldUtf8(env, kssTitle, "Shift_JIS");
     s += "|||";
 
     // GAME-JPN
@@ -1970,7 +2035,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     s += "|||";
 
-    return newMetadataString(env, s, "Shift_JIS");
+    return newDecodedString(env, s, "UTF-8");
   }
 
   // Handle PSF format via libpsf
@@ -1980,7 +2045,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // TITLE
     s += "TITLE";
     s += "|||";
-    s += gPsfInfo->title ? gPsfInfo->title : "";
+    s += metadataFieldUtf8(env, gPsfInfo->title, "ISO-8859-1");
     s += "|||";
 
     // TITLE-JPN (not available in PSF)
@@ -1991,7 +2056,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // GAME
     s += "GAME";
     s += "|||";
-    s += gPsfInfo->game ? gPsfInfo->game : "";
+    s += metadataFieldUtf8(env, gPsfInfo->game, "ISO-8859-1");
     s += "|||";
 
     // GAME-JPN
@@ -2013,7 +2078,7 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // ARTIST
     s += "ARTIST";
     s += "|||";
-    s += gPsfInfo->artist ? gPsfInfo->artist : "";
+    s += metadataFieldUtf8(env, gPsfInfo->artist, "ISO-8859-1");
     s += "|||";
 
     // ARTIST-JPN
@@ -2024,22 +2089,22 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     // DATE
     s += "DATE";
     s += "|||";
-    s += gPsfInfo->year ? gPsfInfo->year : "";
+    s += metadataFieldUtf8(env, gPsfInfo->year, "ISO-8859-1");
     s += "|||";
 
     // ENCODED_BY
     s += "ENCODED_BY";
     s += "|||";
-    s += gPsfInfo->psfby ? gPsfInfo->psfby : "";
+    s += metadataFieldUtf8(env, gPsfInfo->psfby, "ISO-8859-1");
     s += "|||";
 
     // COMMENT
     s += "COMMENT";
     s += "|||";
-    s += gPsfInfo->comment ? gPsfInfo->comment : "";
+    s += metadataFieldUtf8(env, gPsfInfo->comment, "ISO-8859-1");
     s += "|||";
 
-    return newMetadataString(env, s, "ISO-8859-1");
+    return newDecodedString(env, s, "UTF-8");
   }
 
   return env->NewStringUTF("");

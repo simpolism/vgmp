@@ -683,7 +683,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     // Position update tracking
     private var lastPositionUpdateMs = 0L
+    private var lastPositionCheckpointMs = 0L
     private val POSITION_UPDATE_INTERVAL_MS = 500L
+    private val POSITION_CHECKPOINT_INTERVAL_MS = 5_000L
 
     private fun startRenderJob() {
         renderJob = serviceScope.launch(Dispatchers.IO) {
@@ -719,10 +721,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         if (nowSpectrum - lastChannelSpectrumUpdateNs >= channelIntervalNs) {
                             lastChannelSpectrumUpdateNs = nowSpectrum
                             val trackPath = currentLocalPath.orEmpty()
-                            val channelData = if (
-                                trackPath.endsWith(".kss", ignoreCase = true) ||
-                                trackPath.endsWith(".mgs", ignoreCase = true)
-                            ) VgmEngine.getChannelSpectrums() else null
+                            val channelData = if (SupportedFormats.isKssFamily(trackPath)) {
+                                VgmEngine.getChannelSpectrums()
+                            } else null
                             _channelSpectrums.emit(channelData)
                         }
                     } else {
@@ -737,7 +738,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
                         lastPositionUpdateMs = now
                         enginePositionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
-                        QueueStateStore.savePosition(applicationContext, enginePositionMs)
+                        if (now - lastPositionCheckpointMs >= POSITION_CHECKPOINT_INTERVAL_MS) {
+                            lastPositionCheckpointMs = now
+                            QueueStateStore.savePosition(applicationContext, enginePositionMs)
+                        }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                             val underruns = audioTrack?.underrunCount ?: 0
                             if (underruns > lastUnderrunCount) {

@@ -358,8 +358,7 @@ class BrowserFragment : Fragment() {
                 runCatching {
                     val path = materializeForInspection(track)
                     val count = VgmEngine.getTrackCountDirect(path)
-                    val first = if (track.displayName.endsWith(".kss", true) ||
-                        track.displayName.endsWith(".mgs", true)) {
+                    val first = if (SupportedFormats.isKssFamily(track.displayName)) {
                         VgmEngine.getKssTrackRange(path).firstOrNull() ?: 0
                     } else 0
                     val titles = if (count > 1) List(count) { offset ->
@@ -486,9 +485,7 @@ class BrowserFragment : Fragment() {
     }
 
     private fun isPotentialMultiTrack(name: String): Boolean =
-        name.substringAfterLast('.', "").lowercase() in setOf(
-            "nsf", "nsfe", "gbs", "hes", "kss", "mgs", "sap", "ay"
-        )
+        SupportedFormats.isMultiTrackContainer(name)
 
     override fun onDestroyView() {
         filterJob?.cancel()

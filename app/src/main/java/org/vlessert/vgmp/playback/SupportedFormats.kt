@@ -1,6 +1,10 @@
 package org.vlessert.vgmp.playback
 
 object SupportedFormats {
+    val kssFamilyExtensions = setOf("kss", "mgs", "bgm", "opx", "mpk", "mbm")
+    val multiTrackExtensions = setOf("nsf", "nsfe", "gbs", "hes", "sap", "ay") +
+        kssFamilyExtensions
+
     val extensions = setOf(
         "vgm", "vgz", "nsf", "nsfe", "gbs", "gym", "hes", "ay", "sap", "spc",
         "kss", "mgs", "bgm", "opx", "mpk", "mbm",
@@ -11,5 +15,13 @@ object SupportedFormats {
     )
 
     fun supports(displayName: String): Boolean =
-        displayName.substringAfterLast('.', "").trim().lowercase() in extensions
+        extensionOf(displayName) in extensions
+
+    fun isKssFamily(displayName: String): Boolean = extensionOf(displayName) in kssFamilyExtensions
+
+    fun isMultiTrackContainer(displayName: String): Boolean =
+        extensionOf(displayName) in multiTrackExtensions
+
+    private fun extensionOf(displayName: String): String =
+        displayName.substringAfterLast('.', "").trim().lowercase()
 }

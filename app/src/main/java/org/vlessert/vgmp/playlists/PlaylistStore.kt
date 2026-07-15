@@ -11,6 +11,7 @@ import java.util.UUID
 data class PlaylistTrack(
     val uri: Uri,
     val displayName: String,
+    val subtrackIndex: Int = -1,
     val archiveEntry: String? = null,
     val artworkUri: Uri? = null,
     val artworkArchiveEntry: String? = null
@@ -18,6 +19,7 @@ data class PlaylistTrack(
     fun toTrackRef() = TrackRef(
         uri,
         displayName,
+        subtrackIndex = subtrackIndex,
         archiveEntry = archiveEntry,
         artwork = artworkUri?.let { ArtworkRef(it, artworkArchiveEntry) }
     )
@@ -26,11 +28,29 @@ data class PlaylistTrack(
         fun from(track: TrackRef) = PlaylistTrack(
             track.uri,
             track.displayName,
+            track.subtrackIndex,
             track.archiveEntry,
             track.artwork?.uri,
             track.artwork?.archiveEntry
         )
+
+        fun fromJson(track: JSONObject) = PlaylistTrack(
+            Uri.parse(track.getString("uri")),
+            track.getString("name"),
+            track.optInt("subtrackIndex", -1),
+            track.optString("archiveEntry").takeIf { it.isNotEmpty() },
+            track.optString("artworkUri").takeIf { it.isNotEmpty() }?.let(Uri::parse),
+            track.optString("artworkArchiveEntry").takeIf { it.isNotEmpty() }
+        )
     }
+
+    fun toJson() = JSONObject()
+        .put("uri", uri.toString())
+        .put("name", displayName)
+        .put("subtrackIndex", subtrackIndex)
+        .put("archiveEntry", archiveEntry ?: "")
+        .put("artworkUri", artworkUri?.toString() ?: "")
+        .put("artworkArchiveEntry", artworkArchiveEntry ?: "")
 }
 data class Playlist(val id: String, val name: String, val tracks: List<PlaylistTrack>)
 
@@ -50,13 +70,7 @@ object PlaylistStore {
                     name = item.getString("name"),
                     tracks = List(tracksJson.length()) { trackIndex ->
                         val track = tracksJson.getJSONObject(trackIndex)
-                        PlaylistTrack(
-                            Uri.parse(track.getString("uri")),
-                            track.getString("name"),
-                            track.optString("archiveEntry").takeIf { it.isNotEmpty() },
-                            track.optString("artworkUri").takeIf { it.isNotEmpty() }?.let(Uri::parse),
-                            track.optString("artworkArchiveEntry").takeIf { it.isNotEmpty() }
-                        )
+                        PlaylistTrack.fromJson(track)
                     }
                 )
             }
@@ -69,10 +83,23 @@ object PlaylistStore {
         return playlist
     }
 
+    fun create(context: Context, name: String, tracks: List<PlaylistTrack>): Playlist {
+        val playlist = Playlist(UUID.randomUUID().toString(), name.trim(), tracks)
+        save(context, getAll(context) + playlist)
+        return playlist
+    }
+
+    fun replaceTracks(context: Context, playlistId: String, tracks: List<PlaylistTrack>) {
+        save(context, getAll(context).map {
+            if (it.id == playlistId) it.copy(tracks = tracks) else it
+        })
+    }
+
     fun addTrack(context: Context, playlistId: String, track: PlaylistTrack) {
         val updated = getAll(context).map { playlist ->
             if (playlist.id == playlistId && playlist.tracks.none {
-                    it.uri == track.uri && it.archiveEntry == track.archiveEntry
+                    it.uri == track.uri && it.archiveEntry == track.archiveEntry &&
+                        it.subtrackIndex == track.subtrackIndex
                 }) {
                 playlist.copy(tracks = playlist.tracks + track)
             } else playlist
@@ -83,9 +110,18 @@ object PlaylistStore {
     fun removeTrack(context: Context, playlistId: String, track: PlaylistTrack) {
         save(context, getAll(context).map { playlist ->
             if (playlist.id == playlistId) playlist.copy(tracks = playlist.tracks.filterNot {
-                it.uri == track.uri && it.archiveEntry == track.archiveEntry
+                it.uri == track.uri && it.archiveEntry == track.archiveEntry &&
+                    it.subtrackIndex == track.subtrackIndex
             })
             else playlist
+        })
+    }
+
+    fun removeTrackAt(context: Context, playlistId: String, index: Int) {
+        save(context, getAll(context).map { playlist ->
+            if (playlist.id == playlistId && index in playlist.tracks.indices) {
+                playlist.copy(tracks = playlist.tracks.toMutableList().apply { removeAt(index) })
+            } else playlist
         })
     }
 
@@ -97,14 +133,7 @@ object PlaylistStore {
         playlists.forEach { playlist ->
             val tracks = JSONArray()
             playlist.tracks.forEach { track ->
-                tracks.put(
-                    JSONObject()
-                        .put("uri", track.uri.toString())
-                        .put("name", track.displayName)
-                        .put("archiveEntry", track.archiveEntry ?: "")
-                        .put("artworkUri", track.artworkUri?.toString() ?: "")
-                        .put("artworkArchiveEntry", track.artworkArchiveEntry ?: "")
-                )
+                tracks.put(track.toJson())
             }
             json.put(JSONObject().put("id", playlist.id).put("name", playlist.name).put("tracks", tracks))
         }

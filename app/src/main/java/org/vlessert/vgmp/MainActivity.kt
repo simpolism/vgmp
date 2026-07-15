@@ -66,6 +66,10 @@ class MainActivity : AppCompatActivity() {
             }
             supportFragmentManager.fragments.filterIsInstance<NowPlayingFragment>()
                 .forEach { it.onServiceConnected(playbackService!!) }
+            supportFragmentManager.fragments.filterIsInstance<BrowserFragment>()
+                .forEach { it.onServiceConnected(svc) }
+            supportFragmentManager.fragments.filterIsInstance<PlaylistsFragment>()
+                .forEach { it.onServiceConnected(svc) }
             svc.setVisualizerActive(isAnalyzerVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
             
             // Start observing spectrum for kaleidoscope
@@ -334,7 +338,9 @@ class MainActivity : AppCompatActivity() {
         transaction.commit()
         val playerTab = itemId == R.id.nav_player
         binding.miniPlayer.root.visibility = if (playerTab) View.GONE else View.VISIBLE
+        binding.miniProgress.visibility = if (playerTab) View.GONE else binding.miniProgress.visibility
         updateContentBottomMargin()
+        if (playbackService != null) updateMiniPlayer()
     }
 
     private fun updateContentBottomMargin() {
@@ -353,8 +359,19 @@ class MainActivity : AppCompatActivity() {
     fun updateMiniPlayer() {
         val svc = playbackService ?: return
         val track = svc.currentTrack
-        binding.miniPlayer.tvMiniTitle.text = track?.title ?: getString(R.string.no_track_playing)
-        binding.miniPlayer.tvMiniGame.text = svc.getCurrentTags().displayGame
+        binding.miniPlayer.tvMiniTitle.text = track?.title.orEmpty()
+        binding.miniPlayer.tvMiniGame.text = if (track == null) "" else svc.getCurrentTags().displayGame
+        val hasQueue = svc.queueTracks.value.isNotEmpty()
+        binding.miniPlayer.btnMiniPrev.isEnabled = hasQueue
+        binding.miniPlayer.btnMiniPlayPause.isEnabled = hasQueue
+        binding.miniPlayer.btnMiniNext.isEnabled = hasQueue
+        val duration = svc.playbackInfo.value.durationMs
+        binding.miniProgress.visibility = if (
+            currentTabId != R.id.nav_player && track != null && duration > 0
+        ) View.VISIBLE else View.GONE
+        binding.miniProgress.progress = if (duration > 0) {
+            (svc.getCurrentPositionMs() * 1000L / duration).toInt().coerceIn(0, 1000)
+        } else 0
         val isPlaying = svc.playing
         binding.miniPlayer.btnMiniPlayPause.setImageResource(
             if (isPlaying) R.drawable.ic_pause else R.drawable.ic_play

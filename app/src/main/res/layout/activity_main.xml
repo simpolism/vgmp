@@ -52,6 +52,16 @@
             android:layout_gravity="bottom"
             android:layout_marginBottom="64dp" />
 
+        <ProgressBar
+            android:id="@+id/mini_progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:layout_gravity="bottom"
+            android:layout_marginBottom="134dp"
+            android:max="1000"
+            android:progressTint="@color/vgmp_accent" />
+
         <com.google.android.material.bottomnavigation.BottomNavigationView
             android:id="@+id/bottom_navigation"
             android:layout_width="match_parent"

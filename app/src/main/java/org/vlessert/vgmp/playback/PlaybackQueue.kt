@@ -44,4 +44,50 @@ class PlaybackQueue<T> {
         index = previous.coerceIn(tracks.indices)
         return current
     }
+
+    fun add(item: T) {
+        tracks = tracks + item
+        if (index < 0) index = 0
+    }
+
+    fun insertNext(item: T) {
+        val insertion = if (index in tracks.indices) index + 1 else tracks.size
+        tracks = tracks.toMutableList().apply { add(insertion, item) }
+        if (index < 0) index = 0
+    }
+
+    data class Removal<T>(val removed: T, val removedCurrent: Boolean, val newCurrent: T?)
+
+    fun removeAt(position: Int): Removal<T>? {
+        if (position !in tracks.indices) return null
+        val oldIndex = index
+        val mutable = tracks.toMutableList()
+        val removed = mutable.removeAt(position)
+        tracks = mutable
+        index = when {
+            tracks.isEmpty() -> -1
+            position < oldIndex -> oldIndex - 1
+            position == oldIndex -> oldIndex.coerceAtMost(tracks.lastIndex)
+            else -> oldIndex
+        }
+        shuffleHistory.clear()
+        return Removal(removed, position == oldIndex, current)
+    }
+
+    fun move(from: Int, to: Int): Boolean {
+        if (from !in tracks.indices || to !in tracks.indices || from == to) return false
+        val oldIndex = index
+        val mutable = tracks.toMutableList()
+        val item = mutable.removeAt(from)
+        mutable.add(to, item)
+        tracks = mutable
+        index = when {
+            from == oldIndex -> to
+            from < oldIndex && to >= oldIndex -> oldIndex - 1
+            from > oldIndex && to <= oldIndex -> oldIndex + 1
+            else -> oldIndex
+        }
+        shuffleHistory.clear()
+        return true
+    }
 }

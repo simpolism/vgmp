@@ -63,6 +63,8 @@ object VgmEngine {
     @JvmStatic external fun nGetCurrentTrack(): Int
     @JvmStatic external fun nIsMultiTrack(path: String): Boolean
     @JvmStatic external fun nGetTrackLength(path: String, trackIndex: Int): Long
+    @JvmStatic external fun nGetTrackCountDirect(path: String): Int
+    @JvmStatic external fun nGetTrackTitleDirect(path: String, trackIndex: Int): String
 
     // Endless loop mode
     @JvmStatic external fun nSetEndlessLoop(enabled: Boolean)
@@ -123,6 +125,9 @@ object VgmEngine {
     suspend fun getCurrentTrack(): Int = mutex.withLock { nGetCurrentTrack() }
     suspend fun isMultiTrack(path: String): Boolean = mutex.withLock { nIsMultiTrack(path) }
     suspend fun getTrackLength(path: String, trackIndex: Int): Long = mutex.withLock { nGetTrackLength(path, trackIndex) }
+    suspend fun getTrackCountDirect(path: String): Int = mutex.withLock { nGetTrackCountDirect(path) }
+    suspend fun getTrackTitleDirect(path: String, trackIndex: Int): String =
+        mutex.withLock { nGetTrackTitleDirect(path, trackIndex) }
     
     // Endless loop mode
     suspend fun setEndlessLoop(enabled: Boolean) = mutex.withLock { nSetEndlessLoop(enabled) }

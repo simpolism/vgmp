@@ -29,6 +29,7 @@ import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.views.ChannelSpectrumView
+import com.google.android.material.snackbar.Snackbar
 
 class NowPlayingFragment : Fragment() {
 
@@ -47,6 +48,7 @@ class NowPlayingFragment : Fragment() {
     private var volumeControlsTrackKey: String? = null
     private var observationJob: Job? = null
     private var observedService: VgmPlaybackService? = null
+    private var modeSnackbar: Snackbar? = null
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -154,6 +156,7 @@ class NowPlayingFragment : Fragment() {
         binding.tvNotes.setOnClickListener {
             notesExpanded = !notesExpanded
             applyNotesExpansion()
+            updateUI()
         }
         binding.btnPrev.setOnClickListener { service?.previousTrack() }
         binding.btnPlayPause.setOnClickListener {
@@ -325,6 +328,10 @@ class NowPlayingFragment : Fragment() {
                 binding.tvNotes.text = buildSpannedString {
                     colorSpan("Notes: ", requireContext().getColor(R.color.vgmp_text_secondary))
                     colorSpan(tags.notes, requireContext().getColor(R.color.vgmp_text_primary))
+                    colorSpan(
+                        if (notesExpanded) "  ▴" else "  ▾",
+                        requireContext().getColor(R.color.vgmp_accent)
+                    )
                 }
                 binding.tvNotes.visibility = View.VISIBLE
                 binding.tvNotes.contentDescription = if (notesExpanded) "Collapse notes" else "Expand notes"
@@ -475,17 +482,8 @@ class NowPlayingFragment : Fragment() {
     }
 
     private fun showStyledToast(message: String) {
-        val context = context ?: return
-        val inflater = LayoutInflater.from(context)
-        val layout = inflater.inflate(R.layout.custom_toast, null)
-        val textView = layout.findViewById<TextView>(R.id.toast_text)
-        textView.text = message
-        
-        val toast = Toast(context)
-        toast.duration = Toast.LENGTH_SHORT
-        toast.view = layout
-        toast.setGravity(android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL, 0, 100)
-        toast.show()
+        modeSnackbar?.dismiss()
+        modeSnackbar = Snackbar.make(binding.root, message, Snackbar.LENGTH_SHORT).also { it.show() }
     }
 
     private suspend fun updateVolumeSliders() {
@@ -676,6 +674,7 @@ class NowPlayingFragment : Fragment() {
     override fun onDestroyView() {
         handler.removeCallbacksAndMessages(null)
         observationJob?.cancel()
+        modeSnackbar?.dismiss()
         observationJob = null
         observedService = null
         super.onDestroyView()

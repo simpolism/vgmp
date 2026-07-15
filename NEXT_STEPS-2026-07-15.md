@@ -4,6 +4,11 @@ Ratified plan, 2026-07-15. Companion to `BUGS-2026-07-15.md` (bug fixes tracked 
 features and polish). Items appear roughly in build order; dependencies are called out
 explicitly.
 
+## Implementation status
+
+- [x] Checkpoint 2: items 1–5, 7, and the queue/browser portions of item 9 are implemented and build-verified.
+- [ ] Checkpoint 3: items 6, 8, 10, rotation, and final polish.
+
 ## Explicitly not doing
 
 - **Sleep timer** — no user need.

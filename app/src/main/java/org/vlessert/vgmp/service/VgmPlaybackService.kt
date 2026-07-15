@@ -39,6 +39,7 @@ import org.vlessert.vgmp.engine.VgmTags
 import org.vlessert.vgmp.playback.ArtworkLoader
 import org.vlessert.vgmp.playback.ArtworkResolver
 import org.vlessert.vgmp.playback.PlaybackQueue
+import org.vlessert.vgmp.playback.QueueStateStore
 import org.vlessert.vgmp.playback.SupportedFormats
 import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.playback.ZipArchiveStore
@@ -78,6 +79,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val queue = PlaybackQueue<TrackRef>()
+    private val _queueTracks = MutableStateFlow<List<TrackRef>>(emptyList())
+    val queueTracks: StateFlow<List<TrackRef>> = _queueTracks.asStateFlow()
+    private val engineReady = CompletableDeferred<Unit>()
+    private val restoreComplete = CompletableDeferred<Unit>()
+    private var queueReplaceSnapshot: Pair<List<TrackRef>, Int>? = null
     private var currentLocalPath: String? = null
     private var isPlaying = false
     private var isPaused  = false
@@ -148,6 +154,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             extractRoms()
             VgmEngine.setBassEnabled(SettingsManager.isBassEnabled(applicationContext))
             VgmEngine.setReverbEnabled(SettingsManager.isReverbEnabled(applicationContext))
+            engineReady.complete(Unit)
+            try {
+                restorePersistedQueue()
+            } finally {
+                restoreComplete.complete(Unit)
+            }
         }
     }
 
@@ -227,6 +239,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 PlaybackStateCompat.REPEAT_MODE_ALL -> LoopMode.QUEUE
                 else -> LoopMode.OFF
             }
+            saveQueueState()
         }
         override fun onSetShuffleMode(shuffleMode: Int) {
             this@VgmPlaybackService.shuffleMode = when(shuffleMode) {
@@ -234,6 +247,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 PlaybackStateCompat.SHUFFLE_MODE_GROUP -> ShuffleMode.ON
                 else -> ShuffleMode.OFF
             }
+            saveQueueState()
         }
     }
 
@@ -343,18 +357,113 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val requested = tracks.getOrNull(startIndex)
         val playable = tracks.filter { isSupportedDocument(it.displayName) }
         val playableIndex = requested?.let(playable::indexOf)?.takeIf { it >= 0 } ?: 0
-        queue.replace(playable, playableIndex)
-        if (queue.current == null) {
+        if (playable.isEmpty()) {
             Toast.makeText(applicationContext, "No playable tracks", Toast.LENGTH_SHORT).show()
             return
         }
-        serviceScope.launch { startCurrentTrack() }
+        if (queue.tracks.isNotEmpty()) queueReplaceSnapshot = queue.tracks to queue.index
+        replaceQueue(playable, playableIndex)
+        serviceScope.launch {
+            engineReady.await()
+            startCurrentTrack()
+        }
     }
 
     fun playDocument(uri: Uri, displayName: String) = playQueue(listOf(TrackRef(uri, displayName)))
 
-    private suspend fun startCurrentTrack() = coroutineScope {
-        val track = queue.current ?: return@coroutineScope
+    private fun replaceQueue(tracks: List<TrackRef>, index: Int) {
+        queue.replace(tracks, index)
+        _queueTracks.value = queue.tracks
+        saveQueueState()
+    }
+
+    fun undoQueueReplacement(): Boolean {
+        val snapshot = queueReplaceSnapshot ?: return false
+        queueReplaceSnapshot = null
+        replaceQueue(snapshot.first, snapshot.second)
+        serviceScope.launch { startCurrentTrack() }
+        return true
+    }
+
+    fun addToQueue(track: TrackRef, playNext: Boolean = false) {
+        if (!isSupportedDocument(track.displayName)) return
+        if (playNext) queue.insertNext(track) else queue.add(track)
+        _queueTracks.value = queue.tracks
+        saveQueueState()
+    }
+
+    fun removeQueueAt(position: Int) {
+        val result = queue.removeAt(position) ?: return
+        _queueTracks.value = queue.tracks
+        saveQueueState()
+        if (result.removedCurrent) {
+            if (result.newCurrent == null) stopPlayback()
+            else serviceScope.launch { startCurrentTrack() }
+        } else {
+            _playbackState.value = _playbackState.value.copy(queueIndex = queue.index)
+        }
+    }
+
+    fun moveQueueItem(from: Int, to: Int): Boolean {
+        if (!queue.move(from, to)) return false
+        _queueTracks.value = queue.tracks
+        _playbackState.value = _playbackState.value.copy(queueIndex = queue.index)
+        saveQueueState()
+        return true
+    }
+
+    fun playQueueIndex(index: Int) {
+        if (index !in queue.tracks.indices) return
+        queue.replace(queue.tracks, index)
+        _queueTracks.value = queue.tracks
+        saveQueueState()
+        serviceScope.launch { startCurrentTrack() }
+    }
+
+    private suspend fun restorePersistedQueue() {
+        val saved = withContext(Dispatchers.IO) { QueueStateStore.load(applicationContext) } ?: return
+        val playable = withContext(Dispatchers.IO) {
+            saved.tracks.filter { track ->
+                isSupportedDocument(track.displayName) && runCatching {
+                    contentResolver.openAssetFileDescriptor(track.uri, "r")?.use { true } ?: false
+                }.getOrDefault(false)
+            }
+        }
+        if (playable.isEmpty()) {
+            QueueStateStore.clear(applicationContext)
+            return
+        }
+        val savedCurrent = saved.tracks.getOrNull(saved.index)
+        val restoredIndex = savedCurrent?.let(playable::indexOf)?.takeIf { it >= 0 } ?: 0
+        shuffleMode = runCatching { ShuffleMode.valueOf(saved.shuffleMode) }.getOrDefault(ShuffleMode.OFF)
+        loopMode = runCatching { LoopMode.valueOf(saved.loopMode) }.getOrDefault(LoopMode.OFF)
+        replaceQueue(playable, restoredIndex)
+        var position = saved.positionMs
+        while (queue.current != null && !startCurrentTrack(position, restorePaused = true)) {
+            queue.removeAt(queue.index)
+            _queueTracks.value = queue.tracks
+            position = 0L
+        }
+        if (queue.current == null) QueueStateStore.clear(applicationContext) else saveQueueState()
+    }
+
+    private fun saveQueueState() {
+        QueueStateStore.saveQueue(
+            applicationContext,
+            queue.tracks,
+            queue.index,
+            shuffleMode.name,
+            loopMode.name
+        )
+        QueueStateStore.savePosition(applicationContext, currentPositionMs())
+    }
+
+    private suspend fun startCurrentTrack(
+        restoredPositionMs: Long = 0L,
+        restorePaused: Boolean = false
+    ): Boolean = coroutineScope {
+        engineReady.await()
+        val track = queue.current ?: return@coroutineScope false
         _artwork.value = null
         metadataArtwork = null
         val artworkLoad = async(Dispatchers.IO) {
@@ -363,12 +472,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
         val path = materialize(track) ?: run {
             artworkLoad.cancel()
-            return@coroutineScope
+            return@coroutineScope false
         }
         _artwork.value = artworkLoad.await()
         metadataArtwork = _artwork.value?.let(::scaledMetadataArtwork)
         currentLocalPath = path
-        startTrack(track, path)
+        startTrack(track, path, restoredPositionMs, restorePaused)
+        true
     }
 
     private suspend fun materialize(track: TrackRef): String? {
@@ -398,8 +508,18 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
     }
 
-    private suspend fun startTrack(track: TrackRef, path: String) {
+    private suspend fun startTrack(
+        track: TrackRef,
+        path: String,
+        restoredPositionMs: Long = 0L,
+        restorePaused: Boolean = false
+    ) {
         stopRenderJob()
+
+        if (restorePaused) {
+            startTrackWithFocus(track, path, restoredPositionMs, true)
+            return
+        }
         
         // Request audio focus - handle delayed focus for Android Auto
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -435,10 +555,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             hasAudioFocus = true
         }
         
-        startTrackWithFocus(track, path)
+        startTrackWithFocus(track, path, restoredPositionMs, false)
     }
 
-    private suspend fun startTrackWithFocus(track: TrackRef, path: String) {
+    private suspend fun startTrackWithFocus(
+        track: TrackRef,
+        path: String,
+        restoredPositionMs: Long = 0L,
+        restorePaused: Boolean = false
+    ) {
         VgmEngine.setVgmPlaybackHz(SettingsManager.getVgmPlaybackHz(applicationContext))
         VgmEngine.setLoopRepeatCount(SettingsManager.getLoopRepeats(applicationContext))
         val opened = VgmEngine.open(path)
@@ -505,23 +630,37 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         val liveDurationSamples = VgmEngine.getTotalSamples()
         trackDurationMs = if (liveDurationSamples > 0) liveDurationSamples * 1000L / SAMPLE_RATE else 0L
 
+        val initialPosition = restoredPositionMs.coerceIn(
+            0L,
+            trackDurationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
+        )
+        if (initialPosition > 0) {
+            VgmEngine.seek(initialPosition * SAMPLE_RATE / 1000L)
+        }
+
         // Update MediaSession metadata (→ AVRCP 1.6)
         updateMediaSessionMetadata()
 
         // Start audio track and render loop
         isPlaying = true
-        isPaused  = false
-        enginePositionMs = 0L
-        pausedPositionMs = 0L
+        isPaused = restorePaused
+        enginePositionMs = initialPosition
+        pausedPositionMs = initialPosition
 
         audioTrack?.release()
-        audioTrack = createAudioTrack().also { it.play() }
+        audioTrack = createAudioTrack().also { if (!restorePaused) it.play() }
         lastUnderrunCount = 0
 
         startRenderJob()
-        updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
-        startForeground(NOTIF_ID, buildNotification(true))
-        _playbackState.value = PlaybackInfo(true, false, queue.index, track, trackDurationMs)
+        if (restorePaused) {
+            updatePlaybackState(PlaybackStateCompat.STATE_PAUSED)
+            updateNotification(false)
+        } else {
+            updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
+            startForeground(NOTIF_ID, buildNotification(true))
+        }
+        _playbackState.value = PlaybackInfo(true, restorePaused, queue.index, track, trackDurationMs)
+        saveQueueState()
     }
 
     // Position update tracking
@@ -580,6 +719,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     if (now - lastPositionUpdateMs >= POSITION_UPDATE_INTERVAL_MS) {
                         lastPositionUpdateMs = now
                         enginePositionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
+                        QueueStateStore.savePosition(applicationContext, enginePositionMs)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                             val underruns = audioTrack?.underrunCount ?: 0
                             if (underruns > lastUnderrunCount) {
@@ -649,11 +789,26 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun resumeOrPlay() {
+        if (!restoreComplete.isCompleted) {
+            serviceScope.launch {
+                restoreComplete.await()
+                resumeOrPlay()
+            }
+            return
+        }
         if (!isPlaying) {
             if (queue.current != null) serviceScope.launch { startCurrentTrack() }
+            else stopSelf()
             return
         }
         if (isPaused) {
+            if (!hasAudioFocus) {
+                if (!requestAudioFocus()) return
+                if (!hasAudioFocus) {
+                    shouldPlayAfterFocusGain = true
+                    return
+                }
+            }
             isPaused = false
             audioTrack?.play()
             updatePlaybackState(PlaybackStateCompat.STATE_PLAYING)
@@ -673,9 +828,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             stopForeground(STOP_FOREGROUND_DETACH)
         }
         _playbackState.value = _playbackState.value.copy(paused = true, playing = true)
+        saveQueueState()
     }
 
-    private fun stopPlayback() {
+    private fun stopPlayback(persistReset: Boolean = true) {
         isPlaying = false
         isPaused = false
         enginePositionMs = 0L
@@ -694,6 +850,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         _artwork.value = null
         metadataArtwork = null
         _playbackState.value = PlaybackInfo()
+        if (persistReset) saveQueueState()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         } else {
@@ -905,7 +1062,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     }
 
     override fun onDestroy() {
-        stopPlayback()
+        saveQueueState()
+        stopPlayback(persistReset = false)
         runBlocking {
             withTimeoutOrNull(5_000L) { engineCleanupJob?.join() }
         }
@@ -943,14 +1101,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         return fallbackArtBitmap
     }
     
-    fun setShuffle(mode: ShuffleMode) { shuffleMode = mode }
+    fun setShuffle(mode: ShuffleMode) { shuffleMode = mode; saveQueueState() }
     fun getShuffle(): ShuffleMode = shuffleMode
-    fun setLoop(mode: LoopMode) { loopMode = mode }
+    fun setLoop(mode: LoopMode) { loopMode = mode; saveQueueState() }
     fun getLoop(): LoopMode = loopMode
     
     // Legacy boolean setter for compatibility
     fun setLoopEnabled(enabled: Boolean) { 
         loopMode = if (enabled) LoopMode.TRACK else LoopMode.OFF 
+        saveQueueState()
     }
     fun isLoopEnabled(): Boolean = loopMode != LoopMode.OFF
     

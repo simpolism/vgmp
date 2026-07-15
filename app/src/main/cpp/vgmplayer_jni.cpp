@@ -3053,4 +3053,73 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetKssTrackRange(JNIEnv *env,
   return result;
 }
 
+JNIEXPORT jint JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackCountDirect(JNIEnv *env,
+                                                              jclass cls,
+                                                              jstring jpath) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  if (!path)
+    return 1;
+  int count = 1;
+  if (isGmeFormat(path)) {
+    Music_Emu *emu = nullptr;
+    if (!gme_open_file(path, &emu, gSampleRate) && emu) {
+      count = std::max(1, gme_track_count(emu));
+      gme_delete(emu);
+    }
+  } else if (isKssFormat(path)) {
+    std::vector<uint8_t> data;
+    if (readWholeFile(path, data)) {
+      const char *filename = strrchr(path, '/');
+      filename = filename ? filename + 1 : path;
+      KSS *kss = KSS_bin2kss(data.data(), data.size(), filename);
+      if (kss) {
+        count = std::max(1, kss->trk_max - kss->trk_min + 1);
+        KSS_delete(kss);
+      }
+    }
+  }
+  env->ReleaseStringUTFChars(jpath, path);
+  return count;
+}
+
+JNIEXPORT jstring JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetTrackTitleDirect(
+    JNIEnv *env, jclass cls, jstring jpath, jint trackIndex) {
+  const char *path = env->GetStringUTFChars(jpath, nullptr);
+  if (!path)
+    return env->NewStringUTF("");
+  std::string title;
+  const char *fallback = "Shift_JIS";
+  if (isGmeFormat(path)) {
+    Music_Emu *emu = nullptr;
+    if (!gme_open_file(path, &emu, gSampleRate) && emu) {
+      gme_info_t *info = nullptr;
+      if (!gme_track_info(emu, &info, trackIndex) && info) {
+        title = info->song ? info->song : "";
+        gme_free_info(info);
+      }
+      gme_delete(emu);
+    }
+  } else if (isKssFormat(path)) {
+    std::vector<uint8_t> data;
+    if (readWholeFile(path, data)) {
+      const char *filename = strrchr(path, '/');
+      filename = filename ? filename + 1 : path;
+      KSS *kss = KSS_bin2kss(data.data(), data.size(), filename);
+      if (kss) {
+        for (uint16_t i = 0; i < kss->info_num; ++i) {
+          if (kss->info[i].song == trackIndex && kss->info[i].title[0]) {
+            title = kss->info[i].title;
+            break;
+          }
+        }
+        KSS_delete(kss);
+      }
+    }
+  }
+  env->ReleaseStringUTFChars(jpath, path);
+  return newMetadataString(env, title, fallback);
+}
+
 } // extern "C"

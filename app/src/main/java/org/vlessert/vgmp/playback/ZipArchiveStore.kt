@@ -103,7 +103,9 @@ class ZipArchiveStore(private val context: Context) {
                 }
             }
             return children.values.sortedWith(
-                compareBy<Item> { !it.directory }.thenBy { it.displayName.lowercase() }
+                compareBy<Item> { !it.directory }.thenComparator { a, b ->
+                    NaturalSort.compare(a.displayName, b.displayName)
+                }
             )
         }
 

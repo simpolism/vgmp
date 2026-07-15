@@ -8,6 +8,7 @@ import android.view.ViewGroup
 import android.widget.EditText
 import android.widget.TextView
 import androidx.fragment.app.Fragment
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ItemTouchHelper
@@ -17,6 +18,9 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.snackbar.Snackbar
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import android.widget.Toast
 import org.vlessert.vgmp.MainActivity
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentPlaylistsBinding
@@ -24,6 +28,7 @@ import org.vlessert.vgmp.playback.TrackRef
 import org.vlessert.vgmp.playlists.Playlist
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
+import org.vlessert.vgmp.playlists.PlaylistExporter
 import org.vlessert.vgmp.service.VgmPlaybackService
 
 class PlaylistsFragment : Fragment() {
@@ -38,6 +43,23 @@ class PlaylistsFragment : Fragment() {
     private var serviceJob: Job? = null
     private var currentTrack: TrackRef? = null
     private var touchHelper: ItemTouchHelper? = null
+    private var pendingExport: Playlist? = null
+
+    private val chooseExportFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        val playlist = pendingExport
+        pendingExport = null
+        if (uri == null || playlist == null) return@registerForActivityResult
+        viewLifecycleOwner.lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching { PlaylistExporter.export(requireContext(), playlist, uri) }
+            }
+            result.onSuccess {
+                Toast.makeText(requireContext(), "Exported $it tracks", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(requireContext(), "Export failed: ${it.message}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     private val service get() = (activity as? MainActivity)?.getService()
 
@@ -50,6 +72,9 @@ class PlaylistsFragment : Fragment() {
         binding.recyclerPlaylists.layoutManager = LinearLayoutManager(requireContext())
         binding.btnNewPlaylist.setOnClickListener { showCreateDialog() }
         binding.btnSaveQueue.setOnClickListener { saveQueueAsPlaylist() }
+        binding.btnExportPlaylist.setOnClickListener {
+            pendingExport?.let { chooseExportFolder.launch(null) }
+        }
         binding.btnPlaylistBack.setOnClickListener { selection = null; refresh() }
         observeService()
         refresh()
@@ -99,6 +124,7 @@ class PlaylistsFragment : Fragment() {
         binding.btnPlaylistBack.visibility = View.GONE
         binding.btnNewPlaylist.visibility = View.VISIBLE
         binding.btnSaveQueue.visibility = View.GONE
+        binding.btnExportPlaylist.visibility = View.GONE
         binding.tvPlaylistsEmpty.visibility = View.GONE
         val rows = listOf(RootRow(null, "Queue", queueCount)) + playlists.map { RootRow(it, it.name, it.tracks.size) }
         binding.recyclerPlaylists.adapter = RootAdapter(
@@ -117,6 +143,8 @@ class PlaylistsFragment : Fragment() {
         binding.btnPlaylistBack.visibility = View.VISIBLE
         binding.btnNewPlaylist.visibility = View.GONE
         binding.btnSaveQueue.visibility = if (tracks.isEmpty()) View.GONE else View.VISIBLE
+        binding.btnExportPlaylist.visibility = if (tracks.isEmpty()) View.GONE else View.VISIBLE
+        pendingExport = Playlist("queue", "Queue", tracks.map(PlaylistTrack::from))
         showTrackList(tracks, queue = true, playlist = null)
     }
 
@@ -125,6 +153,8 @@ class PlaylistsFragment : Fragment() {
         binding.btnPlaylistBack.visibility = View.VISIBLE
         binding.btnNewPlaylist.visibility = View.GONE
         binding.btnSaveQueue.visibility = View.GONE
+        binding.btnExportPlaylist.visibility = if (playlist.tracks.isEmpty()) View.GONE else View.VISIBLE
+        pendingExport = playlist
         showTrackList(playlist.tracks.map(PlaylistTrack::toTrackRef), queue = false, playlist = playlist)
     }
 

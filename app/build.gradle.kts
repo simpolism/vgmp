@@ -44,8 +44,8 @@ android {
         applicationId = "org.vlessert.vgmp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -111,6 +111,8 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.recyclerview)
     implementation(libs.fragment.ktx)
+    implementation("org.apache.commons:commons-compress:1.28.0")
+    implementation("org.tukaani:xz:1.12")
 
     // Media / Playback
     implementation(libs.androidx.media)

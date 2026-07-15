@@ -41,8 +41,25 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:paddingVertical="10dp"
-                android:text="Browse ZIP archives as folders"
+                android:text="Browse ZIP and 7z archives as folders"
                 android:textColor="@color/vgmp_text_primary" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/tv_archive_cache_size"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="@color/vgmp_text_secondary" />
+                <Button
+                    android:id="@+id/btn_clear_archive_cache"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Clear cache" />
+            </LinearLayout>
 
             <TextView style="@style/VGMP.SettingsHeader" android:text="Playback" />
             <TextView style="@style/VGMP.SettingsLabel" android:text="Embedded loop repeats" />

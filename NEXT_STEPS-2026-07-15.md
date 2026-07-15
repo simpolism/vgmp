@@ -7,7 +7,7 @@ explicitly.
 ## Implementation status
 
 - [x] Checkpoint 2: items 1–5, 7, and the queue/browser portions of item 9 are implemented and build-verified.
-- [ ] Checkpoint 3: items 6, 8, 10, rotation, and final polish.
+- [x] Checkpoint 3: items 6, 8, 10, rotation, and final polish are implemented and build-verified.
 
 ## Explicitly not doing
 

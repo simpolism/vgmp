@@ -49,6 +49,7 @@ class MainActivity : AppCompatActivity() {
     private var isAnalyzerVisible = false
     private var currentTabId = R.id.nav_browse
     private var navigationInsetBottom = 0
+    private var restoreAnalyzerWhenReady = false
     private var playbackInfoJob: Job? = null
     private var spectrumJob: Job? = null
     
@@ -60,8 +61,12 @@ class MainActivity : AppCompatActivity() {
             serviceBound = true
             playbackInfoJob?.cancel()
             playbackInfoJob = lifecycleScope.launch {
-                svc.playbackInfo.collectLatest {
+                svc.playbackInfo.collectLatest { info ->
                     updateMiniPlayer()
+                    if (restoreAnalyzerWhenReady && info.track != null) {
+                        restoreAnalyzerWhenReady = false
+                        showAnalyzer()
+                    }
                 }
             }
             supportFragmentManager.fragments.filterIsInstance<NowPlayingFragment>()
@@ -74,6 +79,10 @@ class MainActivity : AppCompatActivity() {
             
             // Start observing spectrum for kaleidoscope
             startSpectrumObserver()
+            if (restoreAnalyzerWhenReady && svc.currentTrack != null) {
+                restoreAnalyzerWhenReady = false
+                showAnalyzer()
+            }
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
@@ -86,6 +95,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        currentTabId = savedInstanceState?.getInt(STATE_TAB, R.id.nav_browse) ?: R.id.nav_browse
+        restoreAnalyzerWhenReady = savedInstanceState?.getBoolean(STATE_ANALYZER, false) == true
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         applySystemBarInsets()
@@ -97,7 +108,8 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             binding.bottomNavigation.selectedItemId = R.id.nav_browse
         } else {
-            binding.bottomNavigation.post { showTab(binding.bottomNavigation.selectedItemId) }
+            binding.bottomNavigation.selectedItemId = currentTabId
+            binding.bottomNavigation.post { showTab(currentTabId) }
         }
 
         binding.miniPlayer.root.setOnClickListener {
@@ -414,6 +426,17 @@ class MainActivity : AppCompatActivity() {
             unbindService(serviceConnection)
             serviceBound = false
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_TAB, currentTabId)
+        outState.putBoolean(STATE_ANALYZER, isAnalyzerVisible || restoreAnalyzerWhenReady)
+        super.onSaveInstanceState(outState)
+    }
+
+    companion object {
+        private const val STATE_TAB = "selected_tab"
+        private const val STATE_ANALYZER = "analyzer_visible"
     }
 }
 

@@ -7,10 +7,13 @@ import android.view.ViewGroup
 import android.widget.SeekBar
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.vlessert.vgmp.R
 import org.vlessert.vgmp.databinding.FragmentSettingsBinding
 import org.vlessert.vgmp.engine.VgmEngine
 import org.vlessert.vgmp.settings.SettingsManager
+import org.vlessert.vgmp.playback.ZipArchiveStore
 
 class SettingsDialogFragment : InsetAwareDialogFragment() {
     private var _binding: FragmentSettingsBinding? = null
@@ -41,6 +44,7 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         binding.switchReverbEnabled.isChecked = SettingsManager.isReverbEnabled(context)
         binding.switchOpenPlayerOnSelection.isChecked = SettingsManager.openPlayerOnSelection(context)
         binding.switchZipBrowsing.isChecked = SettingsManager.isZipBrowsingEnabled(context)
+        updateCacheSize()
         val loopRepeats = SettingsManager.getLoopRepeats(context)
         binding.seekbarLoopRepeats.progress = loopRepeats
         binding.tvLoopRepeats.text = loopRepeatLabel(loopRepeats)
@@ -81,6 +85,12 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         }
         binding.switchZipBrowsing.setOnCheckedChangeListener { _, enabled ->
             SettingsManager.setZipBrowsingEnabled(context, enabled)
+        }
+        binding.btnClearArchiveCache.setOnClickListener {
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) { ZipArchiveStore.clearCache(context) }
+                updateCacheSize()
+            }
         }
         binding.seekbarLoopRepeats.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
@@ -143,6 +153,17 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         0 -> "No repeats"
         1 -> "1 repeat"
         else -> "$repeats repeats"
+    }
+
+    private fun updateCacheSize() {
+        if (_binding == null) return
+        val bytes = ZipArchiveStore.cacheSize(requireContext())
+        val value = when {
+            bytes >= 1024L * 1024L * 1024L -> "%.1f GiB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+            bytes >= 1024L * 1024L -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
+            else -> "%.1f KiB".format(bytes / 1024.0)
+        }
+        binding.tvArchiveCacheSize.text = "Archive cache: $value / 512 MiB"
     }
 
     companion object { fun newInstance() = SettingsDialogFragment() }

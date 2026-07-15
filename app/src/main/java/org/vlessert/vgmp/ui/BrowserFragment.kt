@@ -190,7 +190,7 @@ class BrowserFragment : Fragment() {
             if (loaded.isFailure) {
                 binding.progress.visibility = View.GONE
                 binding.recyclerEntries.visibility = View.VISIBLE
-                Toast.makeText(requireContext(), "Could not open this folder or ZIP archive", Toast.LENGTH_LONG).show()
+                Toast.makeText(requireContext(), "Could not open this folder or archive", Toast.LENGTH_LONG).show()
                 return@launch
             }
             entries = loaded.getOrThrow()
@@ -228,7 +228,9 @@ class BrowserFragment : Fragment() {
                 val isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR
                 val uri = DocumentsContract.buildDocumentUriUsingTree(directory, id)
                 if (!isDirectory && isArtwork(name)) artwork += name to uri
-                val browseZip = !isDirectory && name.endsWith(".zip", ignoreCase = true) &&
+                val browseZip = !isDirectory && (
+                    name.endsWith(".zip", ignoreCase = true) || name.endsWith(".7z", ignoreCase = true)
+                ) &&
                     SettingsManager.isZipBrowsingEnabled(requireContext())
                 val track = if (!isDirectory && SupportedFormats.supports(name)) TrackRef(uri, name) else null
                 result += Entry(

@@ -233,6 +233,24 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 index
             )
         }
+        override fun onPlayFromSearch(query: String?, extras: Bundle?) {
+            val needle = query?.trim().orEmpty()
+            if (needle.isEmpty()) return
+            val playlists = PlaylistStore.getAll(applicationContext)
+            playlists.firstOrNull { it.name.contains(needle, ignoreCase = true) }?.let {
+                playQueue(it.tracks.map { track -> track.toTrackRef() }, 0)
+                return
+            }
+            playlists.forEach { playlist ->
+                val index = playlist.tracks.indexOfFirst {
+                    it.displayName.contains(needle, ignoreCase = true)
+                }
+                if (index >= 0) {
+                    playQueue(playlist.tracks.map { it.toTrackRef() }, index)
+                    return
+                }
+            }
+        }
         override fun onSetRepeatMode(repeatMode: Int) {
             loopMode = when (repeatMode) {
                 PlaybackStateCompat.REPEAT_MODE_ONE -> LoopMode.TRACK

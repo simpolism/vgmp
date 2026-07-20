@@ -117,6 +117,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var lastChannelSpectrumUpdateNs = 0L
     @Volatile private var visualizerActive = false
     @Volatile private var visualizerFps = 42
+    @Volatile private var measuredVisualizerProducerFps = 0f
+    private var visualizerProducerFrames = 0
+    private var visualizerProducerWindowStartNs = 0L
     private var lastUnderrunCount = 0
 
     private var renderJob: Job? = null
@@ -713,6 +716,18 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             ) nowSpectrum else lastSpectrumUpdateNs + spectrumIntervalNs
                             VgmEngine.getSpectrum(spectrumBuffer)
                             _spectrum.emit(spectrumBuffer.copyOf())
+                            visualizerProducerFrames++
+                            if (visualizerProducerWindowStartNs == 0L) {
+                                visualizerProducerWindowStartNs = nowSpectrum
+                            } else {
+                                val elapsedNs = nowSpectrum - visualizerProducerWindowStartNs
+                                if (elapsedNs >= 1_000_000_000L) {
+                                    measuredVisualizerProducerFps =
+                                        visualizerProducerFrames * 1_000_000_000f / elapsedNs
+                                    visualizerProducerFrames = 0
+                                    visualizerProducerWindowStartNs = nowSpectrum
+                                }
+                            }
                         }
 
                         // Channel meters have their own modest cadence and do not scale with the
@@ -1098,6 +1113,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val currentTrack: TrackRef? get() = queue.current
     val playing: Boolean get() = isPlaying && !isPaused
     val paused: Boolean get() = isPlaying && isPaused
+    val visualizerProducerFps: Float get() = measuredVisualizerProducerFps
     fun getMediaSession() = mediaSession
     fun setVisualizerActive(active: Boolean, targetFps: Int? = null) {
         visualizerActive = active
@@ -1105,6 +1121,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             visualizerFps = (targetFps ?: SettingsManager.getVisualizerFps(applicationContext))
                 .coerceIn(15, 240)
             lastSpectrumUpdateNs = 0L
+            measuredVisualizerProducerFps = 0f
+            visualizerProducerFrames = 0
+            visualizerProducerWindowStartNs = 0L
         }
     }
 

@@ -58,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     private var spectrumJob: Job? = null
     private var previousPreferredRefreshRate: Float? = null
     private var previousPreferredDisplayModeId: Int? = null
+    private var activeVisualizerTargetFps = 60
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -237,8 +238,20 @@ class MainActivity : AppCompatActivity() {
                             hideAnalyzer()
                         } else {
                             when (SettingsManager.getAnalyzerStyle(this@MainActivity)) {
-                                SettingsManager.ANALYZER_STYLE_BARS -> binding.spectrumBarsView.updateFFT(magnitudes)
-                                else -> binding.kaleidoscopeView.updateFFT(magnitudes)
+                                SettingsManager.ANALYZER_STYLE_BARS -> {
+                                    binding.spectrumBarsView.setDiagnostics(
+                                        activeVisualizerTargetFps,
+                                        svc.visualizerProducerFps
+                                    )
+                                    binding.spectrumBarsView.updateFFT(magnitudes)
+                                }
+                                else -> {
+                                    binding.kaleidoscopeView.setDiagnostics(
+                                        activeVisualizerTargetFps,
+                                        svc.visualizerProducerFps
+                                    )
+                                    binding.kaleidoscopeView.updateFFT(magnitudes)
+                                }
                             }
                         }
                     }
@@ -419,6 +432,7 @@ class MainActivity : AppCompatActivity() {
             this,
             SettingsManager.getVisualizerFps(this)
         )
+        activeVisualizerTargetFps = targetFps
         if (previousPreferredRefreshRate == null) {
             previousPreferredRefreshRate = window.attributes.preferredRefreshRate
             previousPreferredDisplayModeId = window.attributes.preferredDisplayModeId
@@ -428,6 +442,8 @@ class MainActivity : AppCompatActivity() {
             preferredRefreshRate = mode?.refreshRate ?: targetFps.toFloat()
             if (mode != null) preferredDisplayModeId = mode.modeId
         }
+        binding.kaleidoscopeView.setTargetFps(targetFps)
+        binding.spectrumBarsView.setTargetFps(targetFps)
         playbackService?.setVisualizerActive(true, targetFps)
     }
 

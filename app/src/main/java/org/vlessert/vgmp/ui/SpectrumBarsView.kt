@@ -7,7 +7,6 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.util.AttributeSet
-import android.view.View
 import org.vlessert.vgmp.settings.SettingsManager
 import kotlin.math.exp
 import kotlin.math.ln
@@ -16,7 +15,7 @@ import kotlin.math.sqrt
 
 class SpectrumBarsView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+) : FrameDrivenVisualizerView(context, attrs, defStyleAttr) {
 
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
@@ -42,7 +41,7 @@ class SpectrumBarsView @JvmOverloads constructor(
 
     fun updateFFT(magnitudes: FloatArray) {
         spectrumData = magnitudes
-        postInvalidateOnAnimation()
+        recordSpectrumInput()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -63,6 +62,7 @@ class SpectrumBarsView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        recordVisualizerDraw()
         val magnitudes = spectrumData ?: return
         if (magnitudes.isEmpty()) return
 
@@ -144,5 +144,6 @@ class SpectrumBarsView @JvmOverloads constructor(
             barRect.set(left, peakY - 5f, left + barWidth, peakY)
             canvas.drawRoundRect(barRect, 4f, 4f, peakPaint)
         }
+        drawFrameDiagnostics(canvas)
     }
 }

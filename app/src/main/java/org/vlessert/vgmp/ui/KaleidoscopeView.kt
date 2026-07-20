@@ -3,12 +3,11 @@ package org.vlessert.vgmp.ui
 import android.content.Context
 import android.graphics.*
 import android.util.AttributeSet
-import android.view.View
 import kotlin.math.*
 
 class KaleidoscopeView @JvmOverloads constructor(
     context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+) : FrameDrivenVisualizerView(context, attrs, defStyleAttr) {
 
     private var spectrumData: FloatArray? = null
     private var rotationAngle = 0f
@@ -61,7 +60,7 @@ class KaleidoscopeView @JvmOverloads constructor(
     
     fun updateFFT(magnitudes: FloatArray) {
         spectrumData = magnitudes
-        postInvalidateOnAnimation()
+        recordSpectrumInput()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -77,6 +76,7 @@ class KaleidoscopeView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        recordVisualizerDraw()
         
         val magnitudes = spectrumData ?: return
         if (magnitudes.isEmpty()) return
@@ -200,5 +200,6 @@ class KaleidoscopeView @JvmOverloads constructor(
         
         // Inner circle
         canvas.drawCircle(centerX, centerY, centerRadius, innerPaint)
+        drawFrameDiagnostics(canvas)
     }
 }

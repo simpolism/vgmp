@@ -41,6 +41,7 @@ import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.BrowserFragment
 import org.vlessert.vgmp.ui.NowPlayingFragment
 import org.vlessert.vgmp.ui.PlaylistsFragment
+import org.vlessert.vgmp.ui.VisualizerRefreshRate
 import org.vlessert.vgmp.settings.SettingsManager
 
 class MainActivity : AppCompatActivity() {
@@ -55,6 +56,8 @@ class MainActivity : AppCompatActivity() {
     private var playbackInfoJob: Job? = null
     private var miniProgressJob: Job? = null
     private var spectrumJob: Job? = null
+    private var previousPreferredRefreshRate: Float? = null
+    private var previousPreferredDisplayModeId: Int? = null
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -87,7 +90,11 @@ class MainActivity : AppCompatActivity() {
                 .forEach { it.onServiceConnected(svc) }
             supportFragmentManager.fragments.filterIsInstance<PlaylistsFragment>()
                 .forEach { it.onServiceConnected(svc) }
-            svc.setVisualizerActive(isAnalyzerVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+            if (isAnalyzerVisible && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                activateVisualizerRuntime()
+            } else {
+                svc.setVisualizerActive(false)
+            }
             
             // Start observing spectrum for kaleidoscope
             startSpectrumObserver()
@@ -245,7 +252,7 @@ class MainActivity : AppCompatActivity() {
         if (playbackService?.currentTrack == null) return
         
         isAnalyzerVisible = true
-        playbackService?.setVisualizerActive(true)
+        activateVisualizerRuntime()
         
         // Hide system UI for true fullscreen
         hideSystemUI()
@@ -271,7 +278,7 @@ class MainActivity : AppCompatActivity() {
     private fun hideAnalyzer() {
         if (!isAnalyzerVisible) return
         isAnalyzerVisible = false
-        playbackService?.setVisualizerActive(false)
+        deactivateVisualizerRuntime()
         
         // Restore system UI
         showSystemUI()
@@ -407,13 +414,41 @@ class MainActivity : AppCompatActivity() {
 
     fun getService() = playbackService
 
+    private fun activateVisualizerRuntime() {
+        val targetFps = VisualizerRefreshRate.targetFps(
+            this,
+            SettingsManager.getVisualizerFps(this)
+        )
+        if (previousPreferredRefreshRate == null) {
+            previousPreferredRefreshRate = window.attributes.preferredRefreshRate
+            previousPreferredDisplayModeId = window.attributes.preferredDisplayModeId
+        }
+        val mode = VisualizerRefreshRate.closestMode(this, targetFps)
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = mode?.refreshRate ?: targetFps.toFloat()
+            if (mode != null) preferredDisplayModeId = mode.modeId
+        }
+        playbackService?.setVisualizerActive(true, targetFps)
+    }
+
+    private fun deactivateVisualizerRuntime() {
+        playbackService?.setVisualizerActive(false)
+        val refreshRate = previousPreferredRefreshRate ?: return
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = refreshRate
+            preferredDisplayModeId = previousPreferredDisplayModeId ?: 0
+        }
+        previousPreferredRefreshRate = null
+        previousPreferredDisplayModeId = null
+    }
+
     override fun onStart() {
         super.onStart()
-        if (isAnalyzerVisible) playbackService?.setVisualizerActive(true)
+        if (isAnalyzerVisible) activateVisualizerRuntime()
     }
 
     override fun onStop() {
-        playbackService?.setVisualizerActive(false)
+        deactivateVisualizerRuntime()
         super.onStop()
     }
     

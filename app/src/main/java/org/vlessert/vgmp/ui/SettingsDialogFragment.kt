@@ -65,8 +65,13 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
             50 -> binding.radioTiming50.isChecked = true
             else -> binding.radioTimingAuto.isChecked = true
         }
-        val fps = SettingsManager.getVisualizerFps(context)
-        binding.seekbarVisualizerFps.progress = fps - 15
+        val maxFps = VisualizerRefreshRate.maxSupportedFps(requireActivity())
+        val configuredFps = SettingsManager.getVisualizerFps(context)
+        val fps = clampVisualizerFps(configuredFps, maxFps)
+        if (fps != configuredFps) SettingsManager.setVisualizerFps(context, fps)
+        binding.tvVisualizerRefreshLabel.text = "Target frame rate (display max $maxFps Hz)"
+        binding.seekbarVisualizerFps.max = maxFps - VisualizerRefreshRate.MIN_FPS
+        binding.seekbarVisualizerFps.progress = fps - VisualizerRefreshRate.MIN_FPS
         binding.tvVisualizerFps.text = "$fps FPS"
     }
 
@@ -135,7 +140,7 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         }
         binding.seekbarVisualizerFps.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                val fps = progress + 15
+                val fps = progress + VisualizerRefreshRate.MIN_FPS
                 binding.tvVisualizerFps.text = "$fps FPS"
                 if (fromUser) SettingsManager.setVisualizerFps(context, fps)
             }

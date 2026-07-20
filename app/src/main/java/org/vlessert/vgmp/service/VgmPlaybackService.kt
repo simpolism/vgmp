@@ -1099,10 +1099,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     val playing: Boolean get() = isPlaying && !isPaused
     val paused: Boolean get() = isPlaying && isPaused
     fun getMediaSession() = mediaSession
-    fun setVisualizerActive(active: Boolean) {
+    fun setVisualizerActive(active: Boolean, targetFps: Int? = null) {
         visualizerActive = active
         if (active) {
-            visualizerFps = SettingsManager.getVisualizerFps(applicationContext)
+            visualizerFps = (targetFps ?: SettingsManager.getVisualizerFps(applicationContext))
+                .coerceIn(15, 240)
             lastSpectrumUpdateNs = 0L
         }
     }

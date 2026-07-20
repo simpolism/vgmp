@@ -157,7 +157,10 @@
                     android:textColor="@color/vgmp_text_primary" />
             </RadioGroup>
 
-            <TextView style="@style/VGMP.SettingsLabel" android:text="Refresh rate" />
+            <TextView
+                android:id="@+id/tv_visualizer_refresh_label"
+                style="@style/VGMP.SettingsLabel"
+                android:text="Target frame rate" />
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -168,7 +171,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:max="225"
+                    android:max="105"
                     android:progressTint="@color/vgmp_accent"
                     android:thumbTint="@color/vgmp_accent" />
                 <TextView

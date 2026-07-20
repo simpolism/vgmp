@@ -13,10 +13,19 @@ class KaleidoscopeView @JvmOverloads constructor(
     private var spectrumData: FloatArray? = null
     private var rotationAngle = 0f
     private var lastDrawMs = 0L
-    private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    // The wedges meet edge-to-edge, so antialiasing each of the hundreds of paths only adds
+    // overdraw. Keeping this paint allocation-free makes high-refresh rendering practical.
+    private val paint = Paint().apply {
         style = Paint.Style.FILL
     }
-    private var path = Path()
+    private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = Color.parseColor("#FF00FF")
+        alpha = 45
+    }
+    private val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
     
     init {
         // Make the view clickable to receive touch events
@@ -25,7 +34,11 @@ class KaleidoscopeView @JvmOverloads constructor(
     
     // Smoothing
     private val smoothingFactor = 0.7f
-    private var smoothedMagnitudes: FloatArray? = null
+    private val binCount = 56
+    private val binned = FloatArray(binCount)
+    private val smoothedMagnitudes = FloatArray(binCount)
+    private val wedgePaths = Array(binCount / 2) { Path() }
+    private var smoothingInitialized = false
     
     // Kaleidoscope segments
     private val segments = 12
@@ -46,16 +59,20 @@ class KaleidoscopeView @JvmOverloads constructor(
         Color.parseColor("#00FF99")   // Green-cyan
     )
     
-    private val gradientColors = intArrayOf(
-        Color.parseColor("#FF00FF"),
-        Color.parseColor("#00FFFF"),
-        Color.parseColor("#FFFF00"),
-        Color.parseColor("#FF00FF")
-    )
-
     fun updateFFT(magnitudes: FloatArray) {
         spectrumData = magnitudes
         postInvalidateOnAnimation()
+    }
+
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        val centerRadius = min(w, h) * 0.075f
+        innerPaint.shader = RadialGradient(
+            w / 2f, h / 2f, centerRadius,
+            intArrayOf(Color.parseColor("#FF00FF"), Color.parseColor("#00FFFF")),
+            null,
+            Shader.TileMode.CLAMP
+        )
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -74,12 +91,7 @@ class KaleidoscopeView @JvmOverloads constructor(
         val centerY = height / 2f
         val maxRadius = min(width, height) / 2f
         
-        // Clear with transparent background
-        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
-        
         // Process magnitudes into bins
-        val binCount = 56
-        val binned = FloatArray(binCount)
         val n = magnitudes.size
         
         for (i in 0 until binCount) {
@@ -95,15 +107,16 @@ class KaleidoscopeView @JvmOverloads constructor(
         }
         
         // Smoothing
-        if (smoothedMagnitudes == null || smoothedMagnitudes!!.size != binCount) {
-            smoothedMagnitudes = binned
+        if (!smoothingInitialized) {
+            binned.copyInto(smoothedMagnitudes)
+            smoothingInitialized = true
         } else {
             for (i in 0 until binCount) {
-                val current = smoothedMagnitudes!![i]
+                val current = smoothedMagnitudes[i]
                 val target = binned[i]
                 val timeConstantMs = if (target > current) 20f else 72f
                 val alpha = (1.0 - exp((-dt / timeConstantMs).toDouble())).toFloat()
-                smoothedMagnitudes!![i] = current + (target - current) * alpha
+                smoothedMagnitudes[i] = current + (target - current) * alpha
             }
         }
         
@@ -116,6 +129,29 @@ class KaleidoscopeView @JvmOverloads constructor(
         
         // Draw kaleidoscope segments
         val angleStep = 360f / segments
+        val innerRadius = maxRadius * 0.2f
+        val barsPerSegment = binCount / 2
+
+        // Build each unique wedge once. Earlier this geometry was rebuilt 24 times per frame
+        // (once for every rotated/mirrored copy), dominating the UI thread at high refresh rates.
+        for (i in 0 until barsPerSegment) {
+            val normalizedMag = (smoothedMagnitudes[i] / 128f).coerceIn(0f, 1f)
+            val outerRadius = innerRadius + (maxRadius - innerRadius) * normalizedMag
+            val angle1 = Math.toRadians((i * angleStep / barsPerSegment).toDouble())
+            val angle2 = Math.toRadians(((i + 1) * angleStep / barsPerSegment).toDouble())
+            val cos1 = cos(angle1).toFloat()
+            val sin1 = sin(angle1).toFloat()
+            val cos2 = cos(angle2).toFloat()
+            val sin2 = sin(angle2).toFloat()
+            wedgePaths[i].apply {
+                reset()
+                moveTo(centerX + innerRadius * cos1, centerY + innerRadius * sin1)
+                lineTo(centerX + outerRadius * cos1, centerY + outerRadius * sin1)
+                lineTo(centerX + outerRadius * cos2, centerY + outerRadius * sin2)
+                lineTo(centerX + innerRadius * cos2, centerY + innerRadius * sin2)
+                close()
+            }
+        }
         
         for (seg in 0 until segments) {
             val baseAngle = seg * angleStep
@@ -130,16 +166,10 @@ class KaleidoscopeView @JvmOverloads constructor(
                 }
                 
                 // Draw radial bars
-                for (i in 0 until binCount / 2) {
-                    val magnitude = smoothedMagnitudes!![i]
-                    val normalizedMag = (magnitude / 128f).coerceIn(0f, 1f)
+                for (i in 0 until barsPerSegment) {
+                    val normalizedMag = (smoothedMagnitudes[i] / 128f).coerceIn(0f, 1f)
                     
                     if (normalizedMag < 0.05f) continue
-                    
-                    val angle1 = (i * angleStep / (binCount / 2))
-                    val angle2 = ((i + 1) * angleStep / (binCount / 2))
-                    val innerRadius = maxRadius * 0.2f
-                    val outerRadius = innerRadius + (maxRadius - innerRadius) * normalizedMag
                     
                     // Create gradient color based on position
                     val colorIndex = (i + seg) % colors.size
@@ -147,27 +177,7 @@ class KaleidoscopeView @JvmOverloads constructor(
                     paint.color = colors[colorIndex]
                     paint.alpha = alpha
                     
-                    // Draw arc segment
-                    path.reset()
-                    path.moveTo(
-                        centerX + innerRadius * cos(Math.toRadians(angle1.toDouble())).toFloat(),
-                        centerY + innerRadius * sin(Math.toRadians(angle1.toDouble())).toFloat()
-                    )
-                    path.lineTo(
-                        centerX + outerRadius * cos(Math.toRadians(angle1.toDouble())).toFloat(),
-                        centerY + outerRadius * sin(Math.toRadians(angle1.toDouble())).toFloat()
-                    )
-                    path.lineTo(
-                        centerX + outerRadius * cos(Math.toRadians(angle2.toDouble())).toFloat(),
-                        centerY + outerRadius * sin(Math.toRadians(angle2.toDouble())).toFloat()
-                    )
-                    path.lineTo(
-                        centerX + innerRadius * cos(Math.toRadians(angle2.toDouble())).toFloat(),
-                        centerY + innerRadius * sin(Math.toRadians(angle2.toDouble())).toFloat()
-                    )
-                    path.close()
-                    
-                    canvas.drawPath(path, paint)
+                    canvas.drawPath(wedgePaths[i], paint)
                 }
             }
             
@@ -178,28 +188,17 @@ class KaleidoscopeView @JvmOverloads constructor(
         
         // Draw center circle with glow effect
         val centerRadius = maxRadius * 0.15f
-        val avgMag = smoothedMagnitudes!!.average().toFloat()
+        var totalMagnitude = 0f
+        for (magnitude in smoothedMagnitudes) totalMagnitude += magnitude
+        val avgMag = totalMagnitude / smoothedMagnitudes.size
         val pulseRadius = centerRadius + centerRadius * 0.3f * (avgMag / 128f).coerceIn(0f, 1f)
         
         // Glow effect
-        val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            color = Color.parseColor("#FF00FF")
-            alpha = 100
-            maskFilter = BlurMaskFilter(30f, BlurMaskFilter.Blur.NORMAL)
-        }
-        canvas.drawCircle(centerX, centerY, pulseRadius, glowPaint)
+        // A translucent halo stays on the hardware path. BlurMaskFilter made this fullscreen
+        // view dramatically more expensive on some GPUs.
+        canvas.drawCircle(centerX, centerY, pulseRadius * 1.35f, glowPaint)
         
         // Inner circle
-        val innerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL
-            shader = RadialGradient(
-                centerX, centerY, centerRadius,
-                intArrayOf(Color.parseColor("#FF00FF"), Color.parseColor("#00FFFF")),
-                null,
-                Shader.TileMode.CLAMP
-            )
-        }
         canvas.drawCircle(centerX, centerY, centerRadius, innerPaint)
     }
 }

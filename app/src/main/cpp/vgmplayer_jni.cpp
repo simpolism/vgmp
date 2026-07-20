@@ -8,6 +8,7 @@
  */
 
 #include <algorithm>
+#include <array>
 #include <android/log.h>
 #include <cmath>
 #include <complex>
@@ -1522,17 +1523,20 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
   if (!outMagnitudes || env->GetArrayLength(outMagnitudes) < FFT_SIZE / 2)
     return;
   int n = FFT_SIZE;
-  std::vector<Complex> a(n);
+  // Reuse the working set and precomputed Hann window. At 120 Hz this avoids 120 heap
+  // allocations and more than 120,000 cosine evaluations every second.
+  static thread_local std::vector<Complex> a(FFT_SIZE);
+  static const std::array<float, FFT_SIZE> window = [] {
+    std::array<float, FFT_SIZE> values{};
+    for (int i = 0; i < FFT_SIZE; i++) {
+      values[i] = 0.5f * (1.0f - std::cos(
+          2.0f * 3.14159265f * (float)i / (float)(FFT_SIZE - 1)));
+    }
+    return values;
+  }();
 
   for (int i = 0; i < n; i++) {
-    a[i] = Complex(gFftRingBuffer[(gFftWriteIdx + i) % n], 0.0f);
-  }
-
-  for (int i = 0; i < n; i++) {
-    float multiplier =
-        0.5f *
-        (1.0f - std::cos(2.0f * 3.14159265f * (float)i / (float)(n - 1)));
-    a[i] *= multiplier;
+    a[i] = Complex(gFftRingBuffer[(gFftWriteIdx + i) % n] * window[i], 0.0f);
   }
 
   fft_process(a);

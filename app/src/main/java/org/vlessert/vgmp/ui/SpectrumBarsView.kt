@@ -33,6 +33,7 @@ class SpectrumBarsView @JvmOverloads constructor(
     private var lastDrawMs = 0L
 
     private val bandCount = 48
+    private val binned = FloatArray(bandCount)
     private val barGap = 5f
     private val corner = 10f
 
@@ -70,8 +71,6 @@ class SpectrumBarsView @JvmOverloads constructor(
         lastDrawMs = now
 
         val n = magnitudes.size
-        val binned = FloatArray(bandCount)
-
         val logarithmic = SettingsManager.getVisualizerAxis(context) ==
             SettingsManager.VISUALIZER_AXIS_LOG
         val balanced = SettingsManager.getVisualizerResponse(context) ==

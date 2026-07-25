@@ -15,6 +15,7 @@ object SettingsManager {
     private const val KEY_REVERB_ENABLED = "reverb_enabled"
     private const val KEY_VGM_PLAYBACK_HZ = "vgm_playback_hz"
     private const val KEY_LOOP_REPEATS = "embedded_loop_repeats"
+    private const val KEY_FADE_OUT_SECONDS = "fade_out_seconds"
     private const val KEY_CHIP_VOLUME_PREFIX = "chip_volume_"
 
     const val ANALYZER_STYLE_KALEIDOSCOPE = "kaleidoscope"
@@ -84,6 +85,14 @@ object SettingsManager {
     fun setLoopRepeats(context: Context, repeats: Int) =
         getPrefs(context).edit().putInt(KEY_LOOP_REPEATS, normalizeLoopRepeats(repeats)).apply()
 
+    fun getFadeOutSeconds(context: Context): Int =
+        normalizeFadeOutSeconds(getPrefs(context).getInt(KEY_FADE_OUT_SECONDS, 5))
+
+    fun setFadeOutSeconds(context: Context, seconds: Int) =
+        getPrefs(context).edit()
+            .putInt(KEY_FADE_OUT_SECONDS, normalizeFadeOutSeconds(seconds))
+            .apply()
+
     private fun chipKey(chipName: String) = KEY_CHIP_VOLUME_PREFIX + chipName.lowercase().trim()
         .replace(Regex("[^a-z0-9]+"), "_")
 
@@ -97,6 +106,8 @@ object SettingsManager {
 internal fun normalizeVgmPlaybackHz(hz: Int): Int = hz.takeIf { it == 50 || it == 60 } ?: 0
 
 internal fun normalizeLoopRepeats(repeats: Int): Int = repeats.coerceIn(0, 10)
+
+internal fun normalizeFadeOutSeconds(seconds: Int): Int = seconds.coerceIn(0, 15)
 
 internal fun nextVgmPlaybackHz(hz: Int): Int = when (normalizeVgmPlaybackHz(hz)) {
     0 -> 60

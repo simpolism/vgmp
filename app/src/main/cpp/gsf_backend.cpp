@@ -246,8 +246,10 @@ bool gsf_open(const char *path, int sample_rate) {
   gState.rom = std::move(loader.rom);
   gState.sample_rate = sample_rate;
   gState.tags = std::move(tag_state.tags);
-  const uint64_t duration_ms = tag_state.length_ms + tag_state.fade_ms;
-  gState.total_samples = duration_ms * static_cast<uint64_t>(sample_rate) / 1000;
+  // The length tag is the authored loop cutoff. VGMP applies its configured
+  // fade after that point, so the file's fade tag is intentionally overridden.
+  gState.total_samples =
+      tag_state.length_ms * static_cast<uint64_t>(sample_rate) / 1000;
   gState.current_sample = 0;
   if (!initialize_core(gState.rom, sample_rate)) {
     gsf_close();
@@ -268,15 +270,9 @@ void gsf_close() {
 int gsf_render(int16_t *stereo, int frames) {
   if (!gState.core || !stereo || frames <= 0)
     return 0;
-  if (gState.total_samples && gState.current_sample >= gState.total_samples)
-    return 0;
-  const uint64_t remaining =
-      gState.total_samples
-          ? gState.total_samples - gState.current_sample
-          : static_cast<uint64_t>(frames);
-  const int requested =
-      static_cast<int>(std::min<uint64_t>(frames, remaining));
-  const int written = render_unbounded(stereo, requested);
+  // Tagged GSF tracks generally run indefinitely. Continue rendering beyond
+  // the authored cutoff so the service can append a configurable fade.
+  const int written = render_unbounded(stereo, frames);
   gState.current_sample += written;
   return written;
 }
@@ -284,8 +280,6 @@ int gsf_render(int16_t *stereo, int frames) {
 bool gsf_seek(uint64_t sample) {
   if (!gState.core || gState.initial_state.empty())
     return false;
-  if (gState.total_samples)
-    sample = std::min(sample, gState.total_samples);
   if (!gState.core->loadState(gState.core, gState.initial_state.data()))
     return false;
   clear_audio_buffers();
@@ -303,8 +297,9 @@ bool gsf_seek(uint64_t sample) {
 }
 
 bool gsf_is_ended() {
-  return gState.total_samples &&
-         gState.current_sample >= gState.total_samples;
+  // GSF does not expose a reliable program-level stop signal. Tagged tracks
+  // are ended by VGMP's timed-cutoff policy; untagged tracks remain open.
+  return false;
 }
 
 uint64_t gsf_current_sample() { return gState.current_sample; }

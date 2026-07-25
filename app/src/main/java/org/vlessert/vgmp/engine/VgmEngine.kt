@@ -24,6 +24,7 @@ object VgmEngine {
     @JvmStatic external fun nPlay()
     @JvmStatic external fun nStop()
     @JvmStatic external fun nIsEnded(): Boolean
+    @JvmStatic external fun nUsesTimedFade(): Boolean
     @JvmStatic external fun nGetTotalSamples(): Long
     @JvmStatic external fun nGetCurrentSample(): Long
     @JvmStatic external fun nSeek(samplePos: Long)
@@ -100,6 +101,7 @@ object VgmEngine {
     suspend fun play() = mutex.withLock { nPlay() }
     suspend fun stop() = mutex.withLock { nStop() }
     suspend fun isEnded(): Boolean = mutex.withLock { nIsEnded() }
+    suspend fun usesTimedFade(): Boolean = mutex.withLock { nUsesTimedFade() }
     suspend fun getTotalSamples(): Long = mutex.withLock { nGetTotalSamples() }
     suspend fun getCurrentSample(): Long = mutex.withLock { nGetCurrentSample() }
     suspend fun seek(samplePos: Long) = mutex.withLock { nSeek(samplePos) }

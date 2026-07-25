@@ -48,6 +48,9 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         val loopRepeats = SettingsManager.getLoopRepeats(context)
         binding.seekbarLoopRepeats.progress = loopRepeats
         binding.tvLoopRepeats.text = loopRepeatLabel(loopRepeats)
+        val fadeOutSeconds = SettingsManager.getFadeOutSeconds(context)
+        binding.seekbarFadeOut.progress = fadeOutSeconds
+        binding.tvFadeOut.text = fadeOutLabel(fadeOutSeconds)
         when (SettingsManager.getAnalyzerStyle(context)) {
             SettingsManager.ANALYZER_STYLE_BARS -> binding.radioBars.isChecked = true
             else -> binding.radioKaleidoscope.isChecked = true
@@ -108,6 +111,17 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
+        binding.seekbarFadeOut.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                binding.tvFadeOut.text = fadeOutLabel(progress)
+                if (fromUser) {
+                    (activity as? org.vlessert.vgmp.MainActivity)?.getService()?.setFadeOutSeconds(progress)
+                        ?: SettingsManager.setFadeOutSeconds(context, progress)
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+        })
         binding.radioAnalyzerStyle.setOnCheckedChangeListener { _, checkedId ->
             SettingsManager.setAnalyzerStyle(
                 context,
@@ -159,6 +173,9 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         1 -> "1 repeat"
         else -> "$repeats repeats"
     }
+
+    private fun fadeOutLabel(seconds: Int): String =
+        if (seconds == 0) "Off" else "$seconds s"
 
     private fun updateCacheSize() {
         if (_binding == null) return

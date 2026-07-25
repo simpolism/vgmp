@@ -12,4 +12,25 @@ class NaturalSortTest {
             names.sortedWith(NaturalSort.names)
         )
     }
+
+    @Test
+    fun sortsDigitLedHexadecimalTrackNumbersByNumericValue() {
+        val names = listOf(
+            "urbz-0010.minigsf",
+            "urbz-000f.minigsf",
+            "urbz-000a.minigsf",
+            "urbz-0001.minigsf",
+            "urbz-0000.minigsf"
+        )
+        assertEquals(
+            listOf(
+                "urbz-0000.minigsf",
+                "urbz-0001.minigsf",
+                "urbz-000a.minigsf",
+                "urbz-000f.minigsf",
+                "urbz-0010.minigsf"
+            ),
+            names.sortedWith(NaturalSort.names)
+        )
+    }
 }

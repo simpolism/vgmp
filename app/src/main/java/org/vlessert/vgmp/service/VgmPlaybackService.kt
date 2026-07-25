@@ -47,6 +47,7 @@ import org.vlessert.vgmp.playback.ZipArchiveStore
 import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.settings.SettingsManager
 import org.vlessert.vgmp.settings.nextVgmPlaybackHz
+import org.vlessert.vgmp.settings.normalizeFadeOutSeconds
 import org.vlessert.vgmp.settings.normalizeLoopRepeats
 import org.vlessert.vgmp.settings.normalizeVgmPlaybackHz
 import java.io.File
@@ -69,7 +70,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         const val ACTION_STOP   = "org.vlessert.vgmp.ACTION_STOP"
         const val MEDIA_ID_ROOT = "root"
         private const val TAG = "VgmPlaybackService"
-        private const val FADE_MS = 2000L
+        private const val SKIP_FADE_MS = 500L
     }
 
     enum class ShuffleMode { OFF, ON }
@@ -93,11 +94,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var loopMode = LoopMode.OFF
     private var currentTags = VgmTags()
     private var trackDurationMs = 0L
+    private var baseDurationSamples = 0L
+    private var trackDurationSamples = 0L
+    private var fadeOutSamples = 0L
+    private var renderedPositionSamples = 0L
+    private var usesTimedFade = false
 
-    // For fade out
-    private var fadeStartTimeMs = 0L
-    private var isFadingOut = false
-    private var currentVolume = 1.0f
+    // Short manual fade used only when skipping between tracks.
+    private var manualFadeStartTimeMs = 0L
+    private var isManualFadingOut = false
     
     // Endless loop mode
     private var endlessLoopMode = false
@@ -741,8 +746,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             notes = parsedTags.notes
         )
 
-        val liveDurationSamples = VgmEngine.getTotalSamples()
-        trackDurationMs = if (liveDurationSamples > 0) liveDurationSamples * 1000L / SAMPLE_RATE else 0L
+        baseDurationSamples = VgmEngine.getTotalSamples()
+        usesTimedFade = baseDurationSamples > 0 && VgmEngine.usesTimedFade()
+        refreshFadeDuration()
 
         val initialPosition = restoredPositionMs.coerceIn(
             0L,
@@ -760,6 +766,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         isPaused = restorePaused
         enginePositionMs = initialPosition
         pausedPositionMs = initialPosition
+        renderedPositionSamples = initialPosition * SAMPLE_RATE / 1000L
 
         audioTrack?.release()
         audioTrack = createAudioTrack().also { if (!restorePaused) it.play() }
@@ -791,10 +798,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         delay(50)
                         continue
                     }
+                    val bufferStartSample = renderedPositionSamples
                     val framesWritten = VgmEngine.fillBuffer(renderBuffer, BUFFER_FRAMES)
                     if (framesWritten > 0) {
-                        applyVolumeAndFade(renderBuffer, framesWritten)
+                        applyVolumeAndFade(renderBuffer, framesWritten, bufferStartSample)
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
+                        renderedPositionSamples += framesWritten
 
                         // Fullscreen FFT work is demand-driven; normal playback should not pay for it.
                         val nowSpectrum = SystemClock.elapsedRealtimeNanos()
@@ -863,14 +872,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     // Skip fade out and track end detection in endless loop mode
                     if (endlessLoopMode) continue
                     
-                    // Trigger fade out before actual end if we know the duration
-                    val pos = currentPositionMs()
-                    if (trackDurationMs > 0 && pos >= trackDurationMs - FADE_MS && !isFadingOut) {
-                        startFadeOut()
-                    }
-
-                    // Check if track ended
-                    if (VgmEngine.isEnded() || (isFadingOut && SystemClock.elapsedRealtime() >= fadeStartTimeMs + FADE_MS)) {
+                    val timedCutoffReached =
+                        usesTimedFade &&
+                            trackDurationSamples > 0 &&
+                            renderedPositionSamples >= trackDurationSamples
+                    val naturalEndReached = !usesTimedFade && VgmEngine.isEnded()
+                    if (timedCutoffReached || naturalEndReached) {
                         serviceScope.launch { onTrackEnded() }
                         break
                     }
@@ -881,27 +888,50 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
     }
 
-    private fun startFadeOut() {
-        if (isFadingOut) return
-        isFadingOut = true
-        fadeStartTimeMs = SystemClock.elapsedRealtime()
+    private fun startManualFadeOut() {
+        if (isManualFadingOut) return
+        isManualFadingOut = true
+        manualFadeStartTimeMs = SystemClock.elapsedRealtime()
     }
 
-    private fun applyVolumeAndFade(buffer: ShortArray, frames: Int) {
-        if (!isFadingOut) return
-        
-        val elapsed = SystemClock.elapsedRealtime() - fadeStartTimeMs
-        val fadeFactor = (1.0f - (elapsed.toFloat() / FADE_MS)).coerceIn(0f, 1f)
-        
-        for (i in 0 until (frames * 2)) {
-            buffer[i] = (buffer[i] * fadeFactor).toInt().toShort()
+    private fun applyVolumeAndFade(buffer: ShortArray, frames: Int, startSample: Long) {
+        val automaticFadeActive =
+            !endlessLoopMode &&
+                usesTimedFade &&
+                fadeOutSamples > 0 &&
+                startSample + frames > baseDurationSamples
+        if (!automaticFadeActive && !isManualFadingOut) return
+
+        val manualGain = if (isManualFadingOut) {
+            val elapsed = SystemClock.elapsedRealtime() - manualFadeStartTimeMs
+            (1f - elapsed.toFloat() / SKIP_FADE_MS).coerceIn(0f, 1f)
+        } else {
+            1f
+        }
+        val automaticStep = if (automaticFadeActive) 1f / fadeOutSamples.toFloat() else 0f
+        var automaticGain =
+            if (automaticFadeActive) timedFadeGain(startSample, baseDurationSamples, fadeOutSamples)
+            else 1f
+        for (frame in 0 until frames) {
+            if (automaticFadeActive && frame > 0 && startSample + frame > baseDurationSamples) {
+                automaticGain = if (startSample + frame - 1 <= baseDurationSamples) {
+                    timedFadeGain(startSample + frame, baseDurationSamples, fadeOutSamples)
+                } else {
+                    (automaticGain - automaticStep).coerceAtLeast(0f)
+                }
+            }
+            val gain = minOf(manualGain, automaticGain)
+            val index = frame * 2
+            buffer[index] = (buffer[index] * gain).toInt().toShort()
+            buffer[index + 1] = (buffer[index + 1] * gain).toInt().toShort()
         }
     }
 
     private fun stopRenderJob() {
         renderJob?.cancel()
         renderJob = null
-        isFadingOut = false
+        isManualFadingOut = false
+        manualFadeStartTimeMs = 0L
         audioTrack?.pause()
         audioTrack?.flush()
     }
@@ -991,9 +1021,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
 
     fun nextTrack() {
         serviceScope.launch {
-            if (!isFadingOut) {
-                startFadeOut()
-                delay(500)
+            if (!isManualFadingOut) {
+                startManualFadeOut()
+                delay(SKIP_FADE_MS)
             }
             val moved = if (shuffleMode == ShuffleMode.OFF) {
                 queue.moveNext(wrap = loopMode == LoopMode.QUEUE)
@@ -1010,9 +1040,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 seekTo(0L)
                 return@launch
             }
-            if (!isFadingOut) {
-                startFadeOut()
-                delay(500)
+            if (!isManualFadingOut) {
+                startManualFadeOut()
+                delay(SKIP_FADE_MS)
             }
             val previous = if (shuffleMode == ShuffleMode.ON) {
                 queue.movePreviousRandom()
@@ -1025,9 +1055,10 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private fun seekTo(posMs: Long) {
         val maximum = trackDurationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
         val clamped = posMs.coerceIn(0L, maximum)
-        isFadingOut = false
-        fadeStartTimeMs = 0L
+        isManualFadingOut = false
+        manualFadeStartTimeMs = 0L
         val samplePos = clamped * SAMPLE_RATE / 1000L
+        renderedPositionSamples = samplePos
         serviceScope.launch(Dispatchers.IO) { VgmEngine.seek(samplePos) }
         enginePositionMs = clamped
         pausedPositionMs = clamped
@@ -1346,10 +1377,34 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
     }
 
+    fun setFadeOutSeconds(seconds: Int) {
+        val normalized = normalizeFadeOutSeconds(seconds)
+        SettingsManager.setFadeOutSeconds(applicationContext, normalized)
+        refreshFadeDuration()
+        updateMediaSessionMetadata()
+        _playbackState.value = _playbackState.value.copy(durationMs = trackDurationMs)
+    }
+
+    private fun refreshFadeDuration() {
+        fadeOutSamples = if (usesTimedFade) {
+            SettingsManager.getFadeOutSeconds(applicationContext).toLong() * SAMPLE_RATE
+        } else {
+            0L
+        }
+        trackDurationSamples = if (baseDurationSamples > 0) {
+            baseDurationSamples + fadeOutSamples
+        } else {
+            0L
+        }
+        trackDurationMs =
+            if (trackDurationSamples > 0) trackDurationSamples * 1000L / SAMPLE_RATE else 0L
+    }
+
     private suspend fun refreshTimelineFromEngine() {
         val positionMs = VgmEngine.getCurrentSample() * 1000L / SAMPLE_RATE
-        val durationSamples = VgmEngine.getTotalSamples()
-        trackDurationMs = if (durationSamples > 0) durationSamples * 1000L / SAMPLE_RATE else 0L
+        baseDurationSamples = VgmEngine.getTotalSamples()
+        usesTimedFade = baseDurationSamples > 0 && VgmEngine.usesTimedFade()
+        refreshFadeDuration()
         enginePositionMs = positionMs
         if (isPaused) pausedPositionMs = positionMs
         updateMediaSessionMetadata()
@@ -1359,4 +1414,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         _playbackState.value = _playbackState.value.copy(durationMs = trackDurationMs)
         updateNotification(isPlaying && !isPaused)
     }
+}
+
+internal fun timedFadeGain(sample: Long, cutoff: Long, fadeSamples: Long): Float {
+    if (fadeSamples <= 0 || sample <= cutoff) return 1f
+    return (1.0 - (sample - cutoff).toDouble() / fadeSamples)
+        .coerceIn(0.0, 1.0)
+        .toFloat()
 }

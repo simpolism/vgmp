@@ -254,22 +254,12 @@ static UINT32 gLoopRepeatCount = 0;
 static void applyGmeLoopPolicy() {
   if (!gGmePlayer)
     return;
-  gme_info_t *info = nullptr;
-  bool hasLoop = gme_track_info(gGmePlayer, &info, gGmeTrackIndex) == 0 &&
-                 info->loop_length > 0;
-  if (gEndlessLoopMode || hasLoop) {
-    // VGMP owns the finite duration/fade when loop metadata is available.
-    gme_set_autoload_playback_limit(gGmePlayer, 0);
-    gme_set_fade_msecs(gGmePlayer, -1, 8000);
-    gme_ignore_silence(gGmePlayer, 1);
-  } else {
-    gme_set_autoload_playback_limit(gGmePlayer, 1);
-    gme_ignore_silence(gGmePlayer, 0);
-    if (info && info->play_length > 0)
-      gme_set_fade_msecs(gGmePlayer, info->play_length, 8000);
-  }
-  if (info)
-    gme_free_info(info);
+  // GME formats are commonly continuous players even when their metadata has
+  // only a play length and no explicit loop point. VGMP owns their cutoff and
+  // configurable fade uniformly.
+  gme_set_autoload_playback_limit(gGmePlayer, 0);
+  gme_set_fade_msecs(gGmePlayer, -1, 8000);
+  gme_ignore_silence(gGmePlayer, 1);
 }
 
 // FFT / Spectrum State
@@ -1023,9 +1013,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     return gme_track_ended(gGmePlayer) ? JNI_TRUE : JNI_FALSE;
   }
   if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
-    // Tracker modules loop forever by default - check if we've reached end
-    // openmpt doesn't have a built-in "ended" check, so we rely on position
-    return JNI_FALSE; // Tracker files typically loop forever
+    const double duration = openmpt_module_get_duration_seconds(gOpenmptModule);
+    const double position = openmpt_module_get_position_seconds(gOpenmptModule);
+    return duration > 0.0 && position >= duration ? JNI_TRUE : JNI_FALSE;
   }
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
     // KSS files can detect stop via KSSPLAY_get_stop_flag
@@ -1059,6 +1049,31 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     return musdoom_is_playing(gMusDoomPlayer) ? JNI_FALSE : JNI_TRUE;
   }
   return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nUsesTimedFade(JNIEnv *env,
+                                                       jclass cls) {
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer)
+    return gVgmPlayer->GetLoopTicks() > 0 ? JNI_TRUE : JNI_FALSE;
+
+  if (gPlayerType == PlayerType::LIBGME && gGmePlayer)
+    return JNI_TRUE;
+
+  if (gPlayerType == PlayerType::LIBKSS && gKss && gKss->info) {
+    for (uint16_t i = 0; i < gKss->info_num; ++i) {
+      if (gKss->info[i].song == gKssTrackIndex &&
+          gKss->info[i].time_in_ms > 0)
+        return JNI_TRUE;
+    }
+  }
+
+  // A GSF length tag is an authored cutoff for an otherwise continuously
+  // emulated program, rather than a natural decoder endpoint.
+  if (gPlayerType == PlayerType::LIBGSF)
+    return gsf_total_samples() > 0 ? JNI_TRUE : JNI_FALSE;
+
+  return JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL

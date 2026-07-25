@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.os.SystemClock
+import android.provider.DocumentsContract
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaDescriptionCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -505,6 +506,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private suspend fun materialize(track: TrackRef): String? {
         if (!SupportedFormats.supports(track.displayName)) return null
         val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
+        if (SupportedFormats.isGsfFamily(track.displayName)) {
+            return materializeGsf(track, directPlayDir)
+        }
         val safeName = track.displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
             .takeLast(180).ifEmpty { "track" }
         val destination = File(directPlayDir, "current-$safeName")
@@ -527,6 +531,95 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             Toast.makeText(applicationContext, "Could not open ${track.displayName}", Toast.LENGTH_LONG).show()
             null
         }
+    }
+
+    private suspend fun materializeGsf(track: TrackRef, directPlayDir: File): String? {
+        val destinationDir = File(directPlayDir, "current-gsf")
+        return try {
+            withContext(Dispatchers.IO) {
+                destinationDir.deleteRecursively()
+                check(destinationDir.mkdirs()) { "Could not prepare GSF playback directory" }
+
+                if (track.archiveEntry != null) {
+                    val archive = ZipArchiveStore(applicationContext)
+                    val parentPath = track.archiveEntry.substringBeforeLast('/', "")
+                    val siblings = archive.list(track.uri, parentPath)
+                    val required = siblings.filter {
+                        !it.directory && (
+                            it.path == track.archiveEntry ||
+                                it.displayName.endsWith(".gsflib", ignoreCase = true)
+                            )
+                    }
+                    required.forEach { item ->
+                        val name = safeCompanionName(item.displayName)
+                        File(destinationDir, name).outputStream().use { output ->
+                            archive.copyEntry(track.uri, item.path, output)
+                        }
+                    }
+                } else {
+                    val selectedName = safeCompanionName(track.displayName)
+                    File(destinationDir, selectedName).outputStream().use { output ->
+                        contentResolver.openInputStream(track.uri)?.use { it.copyTo(output) }
+                            ?: throw IOException("Could not open the selected GSF document")
+                    }
+
+                    val parent = track.parentUri
+                    if (parent == null && track.displayName.endsWith(".minigsf", ignoreCase = true)) {
+                        throw IOException(
+                            "Open miniGSF files from VGMP's folder browser so their GSFLIB can be found"
+                        )
+                    }
+                    if (parent == null) {
+                        return@withContext File(destinationDir, selectedName).absolutePath
+                    }
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(
+                        parent,
+                        DocumentsContract.getDocumentId(parent)
+                    )
+                    val projection = arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    )
+                    contentResolver.query(children, projection, null, null, null)?.use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getString(0)
+                            val name = cursor.getString(1) ?: continue
+                            val mime = cursor.getString(2)
+                            if (
+                                mime == DocumentsContract.Document.MIME_TYPE_DIR ||
+                                !name.endsWith(".gsflib", ignoreCase = true)
+                            ) continue
+                            val uri = DocumentsContract.buildDocumentUriUsingTree(parent, id)
+                            File(destinationDir, safeCompanionName(name)).outputStream().use { output ->
+                                contentResolver.openInputStream(uri)?.use { it.copyTo(output) }
+                                    ?: throw IOException("Could not open GSF library $name")
+                            }
+                        }
+                    }
+                }
+
+                val selected = File(destinationDir, safeCompanionName(track.displayName))
+                check(selected.isFile) { "Could not materialize ${track.displayName}" }
+                selected.absolutePath
+            }
+        } catch (e: Exception) {
+            destinationDir.deleteRecursively()
+            Log.e(TAG, "Failed to prepare GSF family ${track.displayName}", e)
+            Toast.makeText(
+                applicationContext,
+                e.message ?: "Could not prepare ${track.displayName}",
+                Toast.LENGTH_LONG
+            ).show()
+            null
+        }
+    }
+
+    private fun safeCompanionName(name: String): String {
+        require(name.isNotBlank() && '/' !in name && '\\' !in name) {
+            "Invalid companion filename"
+        }
+        return name
     }
 
     private suspend fun startTrack(

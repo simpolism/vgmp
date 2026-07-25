@@ -8,7 +8,9 @@ data class TrackRef(
     val displayName: String,
     val subtrackIndex: Int = -1,
     val archiveEntry: String? = null,
-    val artwork: ArtworkRef? = null
+    val artwork: ArtworkRef? = null,
+    /** Directory containing this document, used to materialize mini-format dependencies. */
+    val parentUri: Uri? = null
 ) {
     val title: String get() = displayName.substringBeforeLast('.', displayName)
 }

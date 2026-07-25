@@ -36,4 +36,13 @@ class SupportedFormatsTest {
         assertTrue(SupportedFormats.isMultiTrackContainer("album.nsfe"))
         assertFalse(SupportedFormats.isKssFamily("album.nsfe"))
     }
+
+    @Test
+    fun gsfAndMiniGsfUseTheGsfBackendButLibrariesAreNotPlayableEntries() {
+        assertTrue(SupportedFormats.supports("music.gsf"))
+        assertTrue(SupportedFormats.supports("01 Title.MINIGSF"))
+        assertTrue(SupportedFormats.isGsfFamily("music.gsf"))
+        assertTrue(SupportedFormats.isGsfFamily("01 Title.MINIGSF"))
+        assertFalse(SupportedFormats.supports("game.gsflib"))
+    }
 }

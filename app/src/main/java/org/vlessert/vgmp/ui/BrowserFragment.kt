@@ -232,7 +232,9 @@ class BrowserFragment : Fragment() {
                     name.endsWith(".zip", ignoreCase = true) || name.endsWith(".7z", ignoreCase = true)
                 ) &&
                     SettingsManager.isZipBrowsingEnabled(requireContext())
-                val track = if (!isDirectory && SupportedFormats.supports(name)) TrackRef(uri, name) else null
+                val track = if (!isDirectory && SupportedFormats.supports(name)) {
+                    TrackRef(uri, name, parentUri = directory)
+                } else null
                 result += Entry(
                     uri = uri,
                     name = name,

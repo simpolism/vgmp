@@ -23,3 +23,11 @@
 [submodule "app/src/main/cpp/libMusDoom"]
 	path = app/src/main/cpp/libMusDoom
 	url = https://github.com/niekvlessert/libMusDoom.git
+[submodule "app/src/main/cpp/mgba-gsf"]
+	path = app/src/main/cpp/mgba-gsf
+	url = https://gitlab.com/kode54/mgba.git
+	branch = gsfplayer
+[submodule "app/src/main/cpp/psflib"]
+	path = app/src/main/cpp/psflib
+	url = https://gitlab.com/kode54/psflib.git
+	branch = main

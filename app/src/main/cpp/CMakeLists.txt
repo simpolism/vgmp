@@ -57,8 +57,28 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom musdoom_build)
 # Include libpsf for PSF/PSF1 files (PlayStation music)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/libpsf psf_build)
 
+# Headless mGBA core and PSF container loader for GSF/miniGSF.
+set(LIBMGBA_ONLY ON CACHE BOOL "" FORCE)
+set(MINIMAL_CORE 3 CACHE STRING "" FORCE)
+set(M_CORE_GBA ON CACHE BOOL "" FORCE)
+set(M_CORE_GB OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(DISABLE_DEPS ON CACHE BOOL "" FORCE)
+set(ENABLE_EXTRA ON CACHE BOOL "" FORCE)
+set(BINARY_NAME mgba-gsf CACHE STRING "" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/mgba-gsf mgba_gsf_build)
+
+add_library(psflib_gsf STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/psflib/psflib.c
+)
+target_include_directories(psflib_gsf PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/psflib
+)
+target_link_libraries(psflib_gsf z)
+
 # JNI glue shared library
-add_library(vgmplayer SHARED vgmplayer_jni.cpp)
+add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp)
 
 target_include_directories(vgmplayer PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
@@ -72,6 +92,9 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/libMusDoom/src
     ${CMAKE_CURRENT_SOURCE_DIR}/libpsf
     ${CMAKE_CURRENT_SOURCE_DIR}/libpsf/spu
+    ${CMAKE_CURRENT_SOURCE_DIR}/mgba-gsf/include
+    ${CMAKE_CURRENT_BINARY_DIR}/mgba_gsf_build/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/psflib
 )
 
 target_link_libraries(vgmplayer
@@ -84,6 +107,8 @@ target_link_libraries(vgmplayer
     ADLMIDI_static
     musdoom
     psf
+    mgba-gsf
+    psflib_gsf
     log
     android
     z

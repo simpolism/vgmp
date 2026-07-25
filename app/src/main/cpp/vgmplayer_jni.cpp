@@ -43,6 +43,7 @@
 // libMusDoom for Doom MUS files (OPL2/OPL3 FM synthesis)
 #include "libmusdoom.h"
 #include "libpsf/driver.h"
+#include "gsf_backend.h"
 #include "memio.h"
 #include "mus2mid.h"
 
@@ -60,7 +61,8 @@ enum class PlayerType {
   LIBKSS,
   LIBADLMIDI,
   LIBMUSDOOM,
-  LIBPSF
+  LIBPSF,
+  LIBGSF
 };
 
 static PlayerType gPlayerType = PlayerType::NONE;
@@ -381,6 +383,17 @@ static bool isPsfFormat(const char *path) {
   return (strcmp(lowerExt, "psf") == 0 || strcmp(lowerExt, "minipsf") == 0);
 }
 
+static bool isGsfFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext)
+    return false;
+  ++ext;
+  char lowerExt[9] = {0};
+  for (int i = 0; ext[i] && i < 8; ++i)
+    lowerExt[i] = static_cast<char>(tolower(ext[i]));
+  return strcmp(lowerExt, "gsf") == 0 || strcmp(lowerExt, "minigsf") == 0;
+}
+
 // Check if file extension is supported by libgme
 static bool isGmeFormat(const char *path) {
   const char *ext = strrchr(path, '.');
@@ -527,6 +540,8 @@ static void cleanup() {
     gAdlPlayer = nullptr;
   }
 
+  gsf_close();
+
   // Stop and join PSF generation thread if running
   if (gPsfGenerationThread.joinable()) {
     sexy_stop(); // signal generation to abort
@@ -659,6 +674,19 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
 
     LOGD("nOpen: libgme success, %d tracks, sampleRate=%u", gGmeTrackCount,
          gSampleRate);
+    return JNI_TRUE;
+  }
+
+  // Check if this is a PSF/PSF1 format for libpsf
+  if (isGsfFormat(path)) {
+    LOGD("Detected GSF format: %s", path);
+    const bool opened = gsf_open(path, static_cast<int>(gSampleRate));
+    env->ReleaseStringUTFChars(jpath, path);
+    if (!opened) {
+      LOGE("gsf_open failed");
+      return JNI_FALSE;
+    }
+    gPlayerType = PlayerType::LIBGSF;
     return JNI_TRUE;
   }
 
@@ -1022,6 +1050,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
     size_t currentPos = gPsfPlaybackPos.load(std::memory_order_relaxed);
     return (currentPos >= cacheSize) ? JNI_TRUE : JNI_FALSE;
   }
+  if (gPlayerType == PlayerType::LIBGSF) {
+    return gsf_is_ended() ? JNI_TRUE : JNI_FALSE;
+  }
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom: check if music is still playing
     // MUS files loop by default when started with looping=1
@@ -1193,6 +1224,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
     // PSF files have length in milliseconds, convert to samples
     return (jlong)gPsfInfo->length * gSampleRate / 1000;
   }
+  if (gPlayerType == PlayerType::LIBGSF) {
+    return static_cast<jlong>(gsf_total_samples());
+  }
   return 0;
 }
 
@@ -1227,6 +1261,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
     // gPsfPlaybackPos is in bytes; each frame is 4 bytes (stereo 16-bit)
     return (jlong)(gPsfPlaybackPos.load(std::memory_order_relaxed) / 4);
   }
+  if (gPlayerType == PlayerType::LIBGSF) {
+    return static_cast<jlong>(gsf_current_sample());
+  }
   return 0;
 }
 
@@ -1260,6 +1297,9 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
         targetBytes = maxBytes;
       gPsfPlaybackPos.store(targetBytes, std::memory_order_relaxed);
     }
+  }
+  if (gPlayerType == PlayerType::LIBGSF) {
+    gsf_seek(static_cast<uint64_t>(samplePos));
   }
   // KSS doesn't have a direct seek function - need to reset and fast-forward
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
@@ -1431,6 +1471,15 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
                               std::memory_order_relaxed);
         written = framesToCopy;
       }
+    }
+  } else if (gPlayerType == PlayerType::LIBGSF) {
+    written = gsf_render(dst, frames);
+    for (jint i = 0; i < written; ++i) {
+      const float sample =
+          (static_cast<float>(dst[i * 2]) + static_cast<float>(dst[i * 2 + 1])) /
+          65536.0f;
+      gFftRingBuffer[gFftWriteIdx] = sample;
+      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom outputs stereo interleaved 16-bit
@@ -2039,6 +2088,26 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||";
     s += "|||";
 
+    return newDecodedString(env, s, "UTF-8");
+  }
+
+  if (gPlayerType == PlayerType::LIBGSF) {
+    const GsfTags &tags = gsf_tags();
+    std::string s;
+    s += "TITLE|||";
+    s += tags.title;
+    s += "|||TITLE-JPN||||||GAME|||";
+    s += tags.game;
+    s += "|||GAME-JPN||||||SYSTEM|||Game Boy Advance";
+    s += "|||SYSTEM-JPN||||||ARTIST|||";
+    s += tags.artist;
+    s += "|||ARTIST-JPN||||||DATE|||";
+    s += tags.year;
+    s += "|||ENCODED_BY|||";
+    s += tags.ripper;
+    s += "|||COMMENT|||";
+    s += tags.comment;
+    s += "|||";
     return newDecodedString(env, s, "UTF-8");
   }
 

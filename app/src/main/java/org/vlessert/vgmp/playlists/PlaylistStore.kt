@@ -14,14 +14,16 @@ data class PlaylistTrack(
     val subtrackIndex: Int = -1,
     val archiveEntry: String? = null,
     val artworkUri: Uri? = null,
-    val artworkArchiveEntry: String? = null
+    val artworkArchiveEntry: String? = null,
+    val parentUri: Uri? = null
 ) {
     fun toTrackRef() = TrackRef(
         uri,
         displayName,
         subtrackIndex = subtrackIndex,
         archiveEntry = archiveEntry,
-        artwork = artworkUri?.let { ArtworkRef(it, artworkArchiveEntry) }
+        artwork = artworkUri?.let { ArtworkRef(it, artworkArchiveEntry) },
+        parentUri = parentUri
     )
 
     companion object {
@@ -31,7 +33,8 @@ data class PlaylistTrack(
             track.subtrackIndex,
             track.archiveEntry,
             track.artwork?.uri,
-            track.artwork?.archiveEntry
+            track.artwork?.archiveEntry,
+            track.parentUri
         )
 
         fun fromJson(track: JSONObject) = PlaylistTrack(
@@ -40,7 +43,8 @@ data class PlaylistTrack(
             track.optInt("subtrackIndex", -1),
             track.optString("archiveEntry").takeIf { it.isNotEmpty() },
             track.optString("artworkUri").takeIf { it.isNotEmpty() }?.let(Uri::parse),
-            track.optString("artworkArchiveEntry").takeIf { it.isNotEmpty() }
+            track.optString("artworkArchiveEntry").takeIf { it.isNotEmpty() },
+            track.optString("parentUri").takeIf { it.isNotEmpty() }?.let(Uri::parse)
         )
     }
 
@@ -51,6 +55,7 @@ data class PlaylistTrack(
         .put("archiveEntry", archiveEntry ?: "")
         .put("artworkUri", artworkUri?.toString() ?: "")
         .put("artworkArchiveEntry", artworkArchiveEntry ?: "")
+        .put("parentUri", parentUri?.toString() ?: "")
 }
 data class Playlist(val id: String, val name: String, val tracks: List<PlaylistTrack>)
 

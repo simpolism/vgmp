@@ -67,6 +67,10 @@ enum class PlayerType {
 
 static PlayerType gPlayerType = PlayerType::NONE;
 static VGMPlayer *gVgmPlayer = nullptr;
+// libvgm exposes the VGM header's playback-volume modifier through
+// PLR_SONG_INFO. VGMPlayer::Render() intentionally returns the unscaled chip
+// mix, so callers that bypass PlayerA must apply this 16.16 gain themselves.
+static INT32 gVgmSongGain = 0x10000;
 static Music_Emu *gGmePlayer = nullptr;
 static openmpt_module *gOpenmptModule = nullptr;
 static KSS *gKss = nullptr;
@@ -493,6 +497,7 @@ static bool isMusFormat(const char *path) {
 static void cleanup() {
   // Reset channel muted states
   gGmeMutedChannels.clear();
+  gVgmSongGain = 0x10000;
 
   // Cleanup libvgm
   if (gVgmPlayer) {
@@ -961,6 +966,14 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
     return JNI_FALSE;
   }
 
+  PLR_SONG_INFO songInfo = {};
+  if (gVgmPlayer->GetSongInfo(songInfo) == 0) {
+    gVgmSongGain = songInfo.volGain;
+  } else {
+    gVgmSongGain = 0x10000;
+    LOGE("nOpen: unable to read VGM song gain; using unity");
+  }
+
   gPlayerType = PlayerType::LIBVGM;
   gVgmPlayer->SetSampleRate(gSampleRate);
   gVgmPlayer->Start();
@@ -1374,8 +1387,13 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       }
 
       for (jint i = 0; i < (jint)got; i++) {
-        INT32 l = buf[i].L >> 8;
-        INT32 r = buf[i].R >> 8;
+        // Apply the VGM header's 16.16 song gain while converting libvgm's
+        // 24-bit-range mix to int16. Use one 64-bit operation so fractional
+        // gain precision is retained before the existing saturation step.
+        INT32 l = static_cast<INT32>(
+            (static_cast<INT64>(buf[i].L) * gVgmSongGain) >> 24);
+        INT32 r = static_cast<INT32>(
+            (static_cast<INT64>(buf[i].R) * gVgmSongGain) >> 24);
         if (l > 32767)
           l = 32767;
         if (l < -32768)

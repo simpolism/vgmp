@@ -268,6 +268,9 @@ static void applyGmeLoopPolicy() {
 
 // FFT / Spectrum State
 #define FFT_SIZE 1024
+#define FFT_WINDOW_SIZE 512
+static_assert(FFT_WINDOW_SIZE <= FFT_SIZE,
+              "FFT analysis window must fit in the sample ring");
 static float gFftRingBuffer[FFT_SIZE];
 static int gFftWriteIdx = 0;
 
@@ -1605,20 +1608,28 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
   if (!outMagnitudes || env->GetArrayLength(outMagnitudes) < FFT_SIZE / 2)
     return;
   int n = FFT_SIZE;
-  // Reuse the working set and precomputed Hann window. At 120 Hz this avoids 120 heap
-  // allocations and more than 120,000 cosine evaluations every second.
+  // Analyze only the freshest 512 samples (11.6 ms at 44.1 kHz), zero-padded
+  // to the existing 1024-point FFT. The old 1024-sample window made adjacent
+  // 120 Hz frames share 64% of their audio and visually masked fast dynamics.
+  // Zero-padding preserves the existing output-bin count and frequency range.
   static thread_local std::vector<Complex> a(FFT_SIZE);
-  static const std::array<float, FFT_SIZE> window = [] {
-    std::array<float, FFT_SIZE> values{};
-    for (int i = 0; i < FFT_SIZE; i++) {
+  static const std::array<float, FFT_WINDOW_SIZE> window = [] {
+    std::array<float, FFT_WINDOW_SIZE> values{};
+    for (int i = 0; i < FFT_WINDOW_SIZE; i++) {
       values[i] = 0.5f * (1.0f - std::cos(
-          2.0f * 3.14159265f * (float)i / (float)(FFT_SIZE - 1)));
+          2.0f * 3.14159265f * (float)i / (float)(FFT_WINDOW_SIZE - 1)));
     }
     return values;
   }();
 
-  for (int i = 0; i < n; i++) {
-    a[i] = Complex(gFftRingBuffer[(gFftWriteIdx + i) % n] * window[i], 0.0f);
+  const int windowStart =
+      (gFftWriteIdx + FFT_SIZE - FFT_WINDOW_SIZE) % FFT_SIZE;
+  for (int i = 0; i < FFT_WINDOW_SIZE; i++) {
+    a[i] =
+        Complex(gFftRingBuffer[(windowStart + i) % n] * window[i], 0.0f);
+  }
+  for (int i = FFT_WINDOW_SIZE; i < n; i++) {
+    a[i] = Complex(0.0f, 0.0f);
   }
 
   fft_process(a);

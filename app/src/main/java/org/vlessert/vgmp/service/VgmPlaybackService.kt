@@ -80,7 +80,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     enum class LoopMode { OFF, TRACK, QUEUE }
 
     private lateinit var mediaSession: MediaSessionCompat
-    private var audioTrack: AudioTrack? = null
+    @Volatile private var audioTrack: AudioTrack? = null
+    private val audioTrackPositionLock = Any()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val queue = PlaybackQueue<TrackRef>()
@@ -772,10 +773,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         pausedPositionMs = initialPosition
         renderedPositionSamples = initialPosition * SAMPLE_RATE / 1000L
 
-        audioTrack?.release()
-        audioTrackFramesGenerated = 0L
-        audioTrackFramesWritten = 0L
-        audioTrack = createAudioTrack().also { if (!restorePaused) it.play() }
+        val replacementAudioTrack = createAudioTrack()
+        synchronized(audioTrackPositionLock) {
+            audioTrack?.release()
+            audioTrackFramesGenerated = 0L
+            audioTrackFramesWritten = 0L
+            audioTrack = replacementAudioTrack
+        }
+        if (!restorePaused) replacementAudioTrack.play()
         lastUnderrunCount = 0
 
         startRenderJob()
@@ -901,10 +906,19 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 // contains render-ahead audio whose newest block may remain unchanged for many
                 // display frames. Sample at Android's extrapolated audible playback head so the
                 // bars advance continuously between those write bursts.
-                VgmEngine.getSpectrum(
-                    spectrumBuffer,
-                    framesBehindNativeWriteHead(audioTimestamp)
-                )
+                try {
+                    VgmEngine.getSpectrum(
+                        spectrumBuffer,
+                        framesBehindNativeWriteHead(audioTimestamp)
+                    )
+                } catch (e: IllegalStateException) {
+                    // A track may stop or be replaced between visualizer frames. AudioTrack
+                    // state errors are transient here and must not terminate the service.
+                    Log.w(TAG, "Visualizer skipped during AudioTrack transition", e)
+                    nextDeadlineNs = 0L
+                    delay(16)
+                    continue
+                }
                 _spectrum.emit(spectrumBuffer.copyOf())
 
                 val emittedAtNs = SystemClock.elapsedRealtimeNanos()
@@ -929,18 +943,20 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private fun framesBehindNativeWriteHead(audioTimestamp: AudioTimestamp): Int {
         val generatedFrames = audioTrackFramesGenerated
         val writtenFrames = audioTrackFramesWritten
-        val track = audioTrack
-        val playedFrames = when {
-            track == null -> generatedFrames
-            track.getTimestamp(audioTimestamp) -> estimatePlayedAudioFrames(
-                timestampFramePosition = audioTimestamp.framePosition,
-                timestampNanos = audioTimestamp.nanoTime,
-                nowNanos = System.nanoTime(),
-                sampleRate = SAMPLE_RATE,
-                writtenFrames = writtenFrames
-            )
-            else -> (track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL)
-                .coerceIn(0L, writtenFrames)
+        val playedFrames = synchronized(audioTrackPositionLock) {
+            val track = audioTrack
+            when {
+                track == null -> generatedFrames
+                track.getTimestamp(audioTimestamp) -> estimatePlayedAudioFrames(
+                    timestampFramePosition = audioTimestamp.framePosition,
+                    timestampNanos = audioTimestamp.nanoTime,
+                    nowNanos = System.nanoTime(),
+                    sampleRate = SAMPLE_RATE,
+                    writtenFrames = writtenFrames
+                )
+                else -> (track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL)
+                    .coerceIn(0L, writtenFrames)
+            }
         }
         return queuedAudioFrames(generatedFrames, playedFrames)
     }
@@ -1059,11 +1075,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             VgmEngine.stop()
             VgmEngine.close()
         }
-        audioTrack?.stop()
-        audioTrack?.release()
-        audioTrack = null
-        audioTrackFramesGenerated = 0L
-        audioTrackFramesWritten = 0L
+        synchronized(audioTrackPositionLock) {
+            audioTrack?.stop()
+            audioTrack?.release()
+            audioTrack = null
+            audioTrackFramesGenerated = 0L
+            audioTrackFramesWritten = 0L
+        }
         updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
         abandonAudioFocus()
         _artwork.value = null

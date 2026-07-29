@@ -44,3 +44,19 @@ internal fun clampVisualizerFps(configuredFps: Int, maxSupportedFps: Int): Int =
         VisualizerRefreshRate.MIN_FPS,
         maxSupportedFps.coerceAtLeast(VisualizerRefreshRate.MIN_FPS)
     )
+
+internal fun visualizerDelayMillis(nowNs: Long, deadlineNs: Long): Long {
+    if (deadlineNs == 0L || nowNs >= deadlineNs) return 0L
+    return (deadlineNs - nowNs + 999_999L) / 1_000_000L
+}
+
+internal fun advanceVisualizerDeadline(
+    previousDeadlineNs: Long,
+    nowNs: Long,
+    intervalNs: Long
+): Long =
+    if (previousDeadlineNs == 0L || nowNs - previousDeadlineNs > intervalNs * 2L) {
+        nowNs + intervalNs
+    } else {
+        previousDeadlineNs + intervalNs
+    }

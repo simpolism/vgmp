@@ -50,6 +50,8 @@ import org.vlessert.vgmp.settings.nextVgmPlaybackHz
 import org.vlessert.vgmp.settings.normalizeFadeOutSeconds
 import org.vlessert.vgmp.settings.normalizeLoopRepeats
 import org.vlessert.vgmp.settings.normalizeVgmPlaybackHz
+import org.vlessert.vgmp.ui.advanceVisualizerDeadline
+import org.vlessert.vgmp.ui.visualizerDelayMillis
 import java.io.File
 import java.io.IOException
 import android.widget.Toast
@@ -110,7 +112,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     // Render thread
     private val _spectrum = MutableStateFlow(FloatArray(512))
     val spectrum: StateFlow<FloatArray> = _spectrum.asStateFlow()
-    private val spectrumBuffer = FloatArray(512)
     private val _artwork = MutableStateFlow<Bitmap?>(null)
     val artwork: StateFlow<Bitmap?> = _artwork.asStateFlow()
     private var metadataArtwork: Bitmap? = null
@@ -119,7 +120,6 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private val _channelSpectrums = MutableStateFlow<FloatArray?>(null)
     val channelSpectrums: StateFlow<FloatArray?> = _channelSpectrums.asStateFlow()
     
-    private var lastSpectrumUpdateNs = 0L
     private var lastChannelSpectrumUpdateNs = 0L
     @Volatile private var visualizerActive = false
     @Volatile private var visualizerFps = 42
@@ -129,6 +129,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var lastUnderrunCount = 0
 
     private var renderJob: Job? = null
+    private var visualizerJob: Job? = null
     private var engineCleanupJob: Job? = null
     private val renderBuffer = ShortArray(BUFFER_FRAMES * 2)  // interleaved stereo
 
@@ -805,35 +806,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                         audioTrack?.write(renderBuffer, 0, framesWritten * 2)
                         renderedPositionSamples += framesWritten
 
-                        // Fullscreen FFT work is demand-driven; normal playback should not pay for it.
-                        val nowSpectrum = SystemClock.elapsedRealtimeNanos()
-                        val spectrumIntervalNs = 1_000_000_000L / visualizerFps
-                        if (visualizerActive && nowSpectrum - lastSpectrumUpdateNs >= spectrumIntervalNs) {
-                            // Advance the deadline rather than resetting it to `now`. Render chunks
-                            // do not divide evenly into every display rate; preserving the remainder
-                            // avoids turning a requested 120 FPS into ~86 FPS.
-                            lastSpectrumUpdateNs = if (
-                                lastSpectrumUpdateNs == 0L ||
-                                nowSpectrum - lastSpectrumUpdateNs > spectrumIntervalNs * 2
-                            ) nowSpectrum else lastSpectrumUpdateNs + spectrumIntervalNs
-                            VgmEngine.getSpectrum(spectrumBuffer)
-                            _spectrum.emit(spectrumBuffer.copyOf())
-                            visualizerProducerFrames++
-                            if (visualizerProducerWindowStartNs == 0L) {
-                                visualizerProducerWindowStartNs = nowSpectrum
-                            } else {
-                                val elapsedNs = nowSpectrum - visualizerProducerWindowStartNs
-                                if (elapsedNs >= 1_000_000_000L) {
-                                    measuredVisualizerProducerFps =
-                                        visualizerProducerFrames * 1_000_000_000f / elapsedNs
-                                    visualizerProducerFrames = 0
-                                    visualizerProducerWindowStartNs = nowSpectrum
-                                }
-                            }
-                        }
-
                         // Channel meters have their own modest cadence and do not scale with the
                         // fullscreen visualizer FPS setting.
+                        val nowSpectrum = SystemClock.elapsedRealtimeNanos()
                         val channelIntervalNs = 1_000_000_000L / 30L
                         if (nowSpectrum - lastChannelSpectrumUpdateNs >= channelIntervalNs) {
                             lastChannelSpectrumUpdateNs = nowSpectrum
@@ -884,6 +859,51 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Render loop error", e)
+            }
+        }
+    }
+
+    private fun startVisualizerJob() {
+        visualizerJob?.cancel()
+        visualizerJob = serviceScope.launch(Dispatchers.Default) {
+            val spectrumBuffer = FloatArray(512)
+            var nextDeadlineNs = 0L
+            while (isActive && visualizerActive) {
+                if (!isPlaying || isPaused) {
+                    nextDeadlineNs = 0L
+                    delay(16)
+                    continue
+                }
+
+                val nowNs = SystemClock.elapsedRealtimeNanos()
+                val intervalNs = 1_000_000_000L / visualizerFps
+                val delayMs = visualizerDelayMillis(nowNs, nextDeadlineNs)
+                if (delayMs > 0L) {
+                    delay(delayMs)
+                    continue
+                }
+
+                // AudioTrack.write() is deliberately blocking and may wake in large bursts on
+                // some devices. Poll the native sample ring independently so the audio sink's
+                // write cadence cannot throttle fullscreen analyzer delivery.
+                VgmEngine.getSpectrum(spectrumBuffer)
+                _spectrum.emit(spectrumBuffer.copyOf())
+
+                val emittedAtNs = SystemClock.elapsedRealtimeNanos()
+                visualizerProducerFrames++
+                if (visualizerProducerWindowStartNs == 0L) {
+                    visualizerProducerWindowStartNs = emittedAtNs
+                } else {
+                    val elapsedNs = emittedAtNs - visualizerProducerWindowStartNs
+                    if (elapsedNs >= 1_000_000_000L) {
+                        measuredVisualizerProducerFps =
+                            visualizerProducerFrames * 1_000_000_000f / elapsedNs
+                        visualizerProducerFrames = 0
+                        visualizerProducerWindowStartNs = emittedAtNs
+                    }
+                }
+                nextDeadlineNs =
+                    advanceVisualizerDeadline(nextDeadlineNs, emittedAtNs, intervalNs)
             }
         }
     }
@@ -1244,10 +1264,13 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         if (active) {
             visualizerFps = (targetFps ?: SettingsManager.getVisualizerFps(applicationContext))
                 .coerceIn(15, 240)
-            lastSpectrumUpdateNs = 0L
             measuredVisualizerProducerFps = 0f
             visualizerProducerFrames = 0
             visualizerProducerWindowStartNs = 0L
+            startVisualizerJob()
+        } else {
+            visualizerJob?.cancel()
+            visualizerJob = null
         }
     }
 

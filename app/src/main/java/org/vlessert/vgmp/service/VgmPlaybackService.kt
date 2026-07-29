@@ -12,6 +12,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.media.AudioTimestamp
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Bundle
@@ -127,6 +128,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private var visualizerProducerFrames = 0
     private var visualizerProducerWindowStartNs = 0L
     private var lastUnderrunCount = 0
+    @Volatile private var audioTrackFramesGenerated = 0L
+    @Volatile private var audioTrackFramesWritten = 0L
 
     private var renderJob: Job? = null
     private var visualizerJob: Job? = null
@@ -770,6 +773,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         renderedPositionSamples = initialPosition * SAMPLE_RATE / 1000L
 
         audioTrack?.release()
+        audioTrackFramesGenerated = 0L
+        audioTrackFramesWritten = 0L
         audioTrack = createAudioTrack().also { if (!restorePaused) it.play() }
         lastUnderrunCount = 0
 
@@ -802,8 +807,16 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val bufferStartSample = renderedPositionSamples
                     val framesWritten = VgmEngine.fillBuffer(renderBuffer, BUFFER_FRAMES)
                     if (framesWritten > 0) {
+                        // The native FFT ring advances in fillBuffer(), before AudioTrack may
+                        // block while accepting this block. Track both heads so the visualizer
+                        // can follow what is audible rather than the render-ahead head.
+                        audioTrackFramesGenerated += framesWritten
                         applyVolumeAndFade(renderBuffer, framesWritten, bufferStartSample)
-                        audioTrack?.write(renderBuffer, 0, framesWritten * 2)
+                        val samplesAccepted =
+                            audioTrack?.write(renderBuffer, 0, framesWritten * 2) ?: 0
+                        if (samplesAccepted > 0) {
+                            audioTrackFramesWritten += samplesAccepted / 2
+                        }
                         renderedPositionSamples += framesWritten
 
                         // Channel meters have their own modest cadence and do not scale with the
@@ -867,6 +880,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         visualizerJob?.cancel()
         visualizerJob = serviceScope.launch(Dispatchers.Default) {
             val spectrumBuffer = FloatArray(512)
+            val audioTimestamp = AudioTimestamp()
             var nextDeadlineNs = 0L
             while (isActive && visualizerActive) {
                 if (!isPlaying || isPaused) {
@@ -883,10 +897,14 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     continue
                 }
 
-                // AudioTrack.write() is deliberately blocking and may wake in large bursts on
-                // some devices. Poll the native sample ring independently so the audio sink's
-                // write cadence cannot throttle fullscreen analyzer delivery.
-                VgmEngine.getSpectrum(spectrumBuffer)
+                // AudioTrack.write() can accept PCM in large bursts. The native ring therefore
+                // contains render-ahead audio whose newest block may remain unchanged for many
+                // display frames. Sample at Android's extrapolated audible playback head so the
+                // bars advance continuously between those write bursts.
+                VgmEngine.getSpectrum(
+                    spectrumBuffer,
+                    framesBehindNativeWriteHead(audioTimestamp)
+                )
                 _spectrum.emit(spectrumBuffer.copyOf())
 
                 val emittedAtNs = SystemClock.elapsedRealtimeNanos()
@@ -906,6 +924,25 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     advanceVisualizerDeadline(nextDeadlineNs, emittedAtNs, intervalNs)
             }
         }
+    }
+
+    private fun framesBehindNativeWriteHead(audioTimestamp: AudioTimestamp): Int {
+        val generatedFrames = audioTrackFramesGenerated
+        val writtenFrames = audioTrackFramesWritten
+        val track = audioTrack
+        val playedFrames = when {
+            track == null -> generatedFrames
+            track.getTimestamp(audioTimestamp) -> estimatePlayedAudioFrames(
+                timestampFramePosition = audioTimestamp.framePosition,
+                timestampNanos = audioTimestamp.nanoTime,
+                nowNanos = System.nanoTime(),
+                sampleRate = SAMPLE_RATE,
+                writtenFrames = writtenFrames
+            )
+            else -> (track.playbackHeadPosition.toLong() and 0xFFFF_FFFFL)
+                .coerceIn(0L, writtenFrames)
+        }
+        return queuedAudioFrames(generatedFrames, playedFrames)
     }
 
     private fun startManualFadeOut() {
@@ -1025,6 +1062,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
+        audioTrackFramesGenerated = 0L
+        audioTrackFramesWritten = 0L
         updatePlaybackState(PlaybackStateCompat.STATE_STOPPED)
         abandonAudioFocus()
         _artwork.value = null

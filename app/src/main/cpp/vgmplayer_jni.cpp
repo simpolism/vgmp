@@ -269,10 +269,18 @@ static void applyGmeLoopPolicy() {
 // FFT / Spectrum State
 #define FFT_SIZE 1024
 #define FFT_WINDOW_SIZE 512
+#define FFT_RING_SIZE 65536
 static_assert(FFT_WINDOW_SIZE <= FFT_SIZE,
               "FFT analysis window must fit in the sample ring");
-static float gFftRingBuffer[FFT_SIZE];
+static_assert(FFT_WINDOW_SIZE <= FFT_RING_SIZE,
+              "FFT analysis window must fit in the PCM history");
+static float gFftRingBuffer[FFT_RING_SIZE];
 static int gFftWriteIdx = 0;
+
+static inline void pushFftSample(float sample) {
+  gFftRingBuffer[gFftWriteIdx] = sample;
+  gFftWriteIdx = (gFftWriteIdx + 1) % FFT_RING_SIZE;
+}
 
 // Bass and Reverb State
 static bool gBassEnabled = false;
@@ -1408,8 +1416,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
         dst[(written + i) * 2] = (jshort)l;
         dst[(written + i) * 2 + 1] = (jshort)r;
 
-        gFftRingBuffer[gFftWriteIdx] = (float)(l + r) / 65536.0f;
-        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+        pushFftSample((float)(l + r) / 65536.0f);
       }
       written += (jint)got;
       remaining -= (jint)got;
@@ -1426,8 +1433,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       for (jint i = 0; i < written; i++) {
         float sample =
             (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
-        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+        pushFftSample(sample / 2.0f);
       }
     }
   } else if (gPlayerType == PlayerType::LIBOPENMPT && gOpenmptModule) {
@@ -1439,8 +1445,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     for (jint i = 0; i < written; i++) {
       float sample =
           (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
-      gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      pushFftSample(sample / 2.0f);
     }
   } else if (gPlayerType == PlayerType::LIBKSS && gKssPlay) {
     // libkss outputs stereo interleaved 16-bit
@@ -1459,8 +1464,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     for (jint i = 0; i < written; i++) {
       float sample =
           (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
-      gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      pushFftSample(sample / 2.0f);
     }
   } else if (gPlayerType == PlayerType::LIBADLMIDI && gAdlPlayer) {
     // libADLMIDI outputs stereo interleaved 16-bit
@@ -1473,8 +1477,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       for (jint i = 0; i < written; i++) {
         float sample =
             (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
-        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+        pushFftSample(sample / 2.0f);
       }
     }
   } else if (gPlayerType == PlayerType::LIBPSF) {
@@ -1499,8 +1502,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
           int16_t l = dst[i * 2];
           int16_t r = dst[i * 2 + 1];
           float sample = (float)l / 32768.0f + (float)r / 32768.0f;
-          gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-          gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+          pushFftSample(sample / 2.0f);
         }
 
         gPsfPlaybackPos.store(currentPos + (size_t)framesToCopy * 4,
@@ -1514,8 +1516,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       const float sample =
           (static_cast<float>(dst[i * 2]) + static_cast<float>(dst[i * 2 + 1])) /
           65536.0f;
-      gFftRingBuffer[gFftWriteIdx] = sample;
-      gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+      pushFftSample(sample);
     }
   } else if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom outputs stereo interleaved 16-bit
@@ -1529,8 +1530,7 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
       for (jint i = 0; i < written; i++) {
         float sample =
             (float)dst[i * 2] / 32768.0f + (float)dst[i * 2 + 1] / 32768.0f;
-        gFftRingBuffer[gFftWriteIdx] = sample / 2.0f;
-        gFftWriteIdx = (gFftWriteIdx + 1) % FFT_SIZE;
+        pushFftSample(sample / 2.0f);
       }
     } else {
       static int musdoomZeroLogCounter = 0;
@@ -1604,7 +1604,8 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
 }
 
 JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
-    JNIEnv *env, jclass cls, jfloatArray outMagnitudes) {
+    JNIEnv *env, jclass cls, jfloatArray outMagnitudes,
+    jint framesBehindWriteHead) {
   if (!outMagnitudes || env->GetArrayLength(outMagnitudes) < FFT_SIZE / 2)
     return;
   int n = FFT_SIZE;
@@ -1622,11 +1623,19 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nGetSpectrum(
     return values;
   }();
 
+  // AudioTrack is buffered, so the latest generated sample can be well ahead
+  // of what is currently audible. Read backwards from the render head by the
+  // service's estimated queue depth and visualize the audible PCM position.
+  const int lookBehind = std::max(
+      0, std::min((int)framesBehindWriteHead,
+                  FFT_RING_SIZE - FFT_WINDOW_SIZE));
+  const int windowEnd =
+      (gFftWriteIdx + FFT_RING_SIZE - lookBehind) % FFT_RING_SIZE;
   const int windowStart =
-      (gFftWriteIdx + FFT_SIZE - FFT_WINDOW_SIZE) % FFT_SIZE;
+      (windowEnd + FFT_RING_SIZE - FFT_WINDOW_SIZE) % FFT_RING_SIZE;
   for (int i = 0; i < FFT_WINDOW_SIZE; i++) {
-    a[i] =
-        Complex(gFftRingBuffer[(windowStart + i) % n] * window[i], 0.0f);
+    a[i] = Complex(
+        gFftRingBuffer[(windowStart + i) % FFT_RING_SIZE] * window[i], 0.0f);
   }
   for (int i = FFT_WINDOW_SIZE; i < n; i++) {
     a[i] = Complex(0.0f, 0.0f);

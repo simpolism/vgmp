@@ -40,7 +40,7 @@ object VgmEngine {
      * Returns tag string: "TrkE|||TrkJ|||GmE|||GmJ|||SysE|||SysJ|||AutE|||AutJ|||..."
      */
     @JvmStatic external fun nGetTags(): String
-    @JvmStatic external fun nGetSpectrum(magnitudes: FloatArray)
+    @JvmStatic external fun nGetSpectrum(magnitudes: FloatArray, framesBehindWriteHead: Int)
 
     /** Scan a VGM file's length without loading it as active track */
     @JvmStatic external fun nGetTrackLengthDirect(path: String): Long
@@ -107,7 +107,8 @@ object VgmEngine {
     suspend fun seek(samplePos: Long) = mutex.withLock { nSeek(samplePos) }
     suspend fun fillBuffer(buffer: ShortArray, frames: Int): Int = mutex.withLock { nFillBuffer(buffer, frames) }
     suspend fun getTags(): String = mutex.withLock { nGetTags() }
-    suspend fun getSpectrum(magnitudes: FloatArray) = mutex.withLock { nGetSpectrum(magnitudes) }
+    suspend fun getSpectrum(magnitudes: FloatArray, framesBehindWriteHead: Int) =
+        mutex.withLock { nGetSpectrum(magnitudes, framesBehindWriteHead) }
     suspend fun getTrackLengthDirect(path: String): Long = mutex.withLock { nGetTrackLengthDirect(path) }
     suspend fun getDeviceCount(): Int = mutex.withLock { nGetDeviceCount() }
     suspend fun getDeviceName(id: Int): String = mutex.withLock { nGetDeviceName(id) }

@@ -33,6 +33,20 @@ class AudioPlaybackPositionTest {
     }
 
     @Test
+    fun extrapolatesBackwardsFromFuturePresentationTimestamp() {
+        assertEquals(
+            1_559L,
+            estimatePlayedAudioFrames(
+                timestampFramePosition = 2_000L,
+                timestampNanos = 2_010_000_000L,
+                nowNanos = 2_000_000_000L,
+                sampleRate = 44_100,
+                writtenFrames = 4_000L
+            )
+        )
+    }
+
+    @Test
     fun computesNonNegativeQueuedFrames() {
         assertEquals(6_000, queuedAudioFrames(10_000L, 4_000L))
         assertEquals(0, queuedAudioFrames(4_000L, 10_000L))

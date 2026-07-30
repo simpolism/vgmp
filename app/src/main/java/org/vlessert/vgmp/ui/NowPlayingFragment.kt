@@ -18,9 +18,7 @@ import android.view.WindowManager
 import android.widget.SeekBar
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.TextView
-import androidx.appcompat.widget.AppCompatImageView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
@@ -34,6 +32,7 @@ import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.views.ChannelSpectrumView
+import org.vlessert.vgmp.ui.views.ZoomableImageView
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.snackbar.Snackbar
 
@@ -248,10 +247,10 @@ class NowPlayingFragment : Fragment() {
 
         val context = requireContext()
         val density = resources.displayMetrics.density
-        val image = AppCompatImageView(context).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
+        val artwork = service?.artwork?.value
+        val image = ZoomableImageView(context).apply {
             contentDescription = "Enlarged album art"
-            service?.artwork?.value?.let(::setImageBitmap)
+            artwork?.let(::setImageBitmap)
                 ?: setImageResource(R.drawable.vgmp_logo)
         }
         val card = MaterialCardView(context).apply {
@@ -284,13 +283,20 @@ class NowPlayingFragment : Fragment() {
         }
         artworkDialog = dialog
         dialog.show()
+        val metrics = resources.displayMetrics
+        val paneSize = fitArtworkPane(
+            artworkWidth = artwork?.width ?: image.drawable?.intrinsicWidth ?: 1,
+            artworkHeight = artwork?.height ?: image.drawable?.intrinsicHeight ?: 1,
+            maxWidth = (metrics.widthPixels * 0.92f).toInt(),
+            maxHeight = (metrics.heightPixels * 0.78f).toInt(),
+            padding = (12f * density).toInt()
+        )
         dialog.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             attributes = attributes.apply { dimAmount = 0.8f }
             decorView.setPadding(0, 0, 0, 0)
-            val metrics = resources.displayMetrics
-            setLayout((metrics.widthPixels * 0.92f).toInt(), (metrics.heightPixels * 0.78f).toInt())
+            setLayout(paneSize.width, paneSize.height)
         }
     }
 

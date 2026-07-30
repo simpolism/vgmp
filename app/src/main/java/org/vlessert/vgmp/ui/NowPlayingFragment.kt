@@ -1,7 +1,9 @@
 package org.vlessert.vgmp.ui
 
-import android.graphics.Color
 import android.app.AlertDialog
+import android.app.Dialog
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,10 +14,13 @@ import android.text.style.ForegroundColorSpan
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.widget.SeekBar
 import android.widget.EditText
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.TextView
-import android.widget.Toast
+import androidx.appcompat.widget.AppCompatImageView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.flow.collectLatest
@@ -29,6 +34,7 @@ import org.vlessert.vgmp.playlists.PlaylistStore
 import org.vlessert.vgmp.playlists.PlaylistTrack
 import org.vlessert.vgmp.service.VgmPlaybackService
 import org.vlessert.vgmp.ui.views.ChannelSpectrumView
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.snackbar.Snackbar
 
 class NowPlayingFragment : Fragment() {
@@ -49,6 +55,8 @@ class NowPlayingFragment : Fragment() {
     private var observationJob: Job? = null
     private var observedService: VgmPlaybackService? = null
     private var modeSnackbar: Snackbar? = null
+    private var playbackDetailsExpanded = false
+    private var artworkDialog: Dialog? = null
 
     companion object {
         fun newInstance() = NowPlayingFragment()
@@ -62,6 +70,7 @@ class NowPlayingFragment : Fragment() {
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
         setupButtons()
+        setPlaybackDetailsExpanded(false)
         setupSeekbar()
         updateUI()
         startPositionUpdater()
@@ -148,10 +157,13 @@ class NowPlayingFragment : Fragment() {
 
     private fun setupButtons() {
         binding.ivArt.setOnClickListener {
-            (activity as? org.vlessert.vgmp.MainActivity)?.showAnalyzer()
+            showArtworkInspection()
         }
         binding.btnVisualizer.setOnClickListener {
             (activity as? org.vlessert.vgmp.MainActivity)?.showAnalyzer()
+        }
+        binding.btnPlaybackDetails.setOnClickListener {
+            setPlaybackDetailsExpanded(!playbackDetailsExpanded)
         }
         binding.tvNotes.setOnClickListener {
             notesExpanded = !notesExpanded
@@ -219,6 +231,66 @@ class NowPlayingFragment : Fragment() {
                     else -> "VGM timing: Auto (use file header)"
                 }
             )
+        }
+    }
+
+    private fun setPlaybackDetailsExpanded(expanded: Boolean) {
+        playbackDetailsExpanded = expanded
+        binding.playbackDetailsContainer.visibility = if (expanded) View.VISIBLE else View.GONE
+        binding.btnPlaybackDetails.text =
+            if (expanded) "Playback details ▴" else "Playback details ▾"
+        binding.btnPlaybackDetails.contentDescription =
+            if (expanded) "Collapse playback details" else "Expand playback details"
+    }
+
+    private fun showArtworkInspection() {
+        artworkDialog?.dismiss()
+
+        val context = requireContext()
+        val density = resources.displayMetrics.density
+        val image = AppCompatImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Enlarged album art"
+            service?.artwork?.value?.let(::setImageBitmap)
+                ?: setImageResource(R.drawable.vgmp_logo)
+        }
+        val card = MaterialCardView(context).apply {
+            radius = 20f * density
+            cardElevation = 12f * density
+            setCardBackgroundColor(context.getColor(R.color.vgmp_background))
+            val padding = (12f * density).toInt()
+            setContentPadding(padding, padding, padding, padding)
+            addView(
+                image,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+
+        val dialog = Dialog(context).apply {
+            setContentView(
+                card,
+                ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+            )
+            setCanceledOnTouchOutside(true)
+            setOnDismissListener {
+                if (artworkDialog === this) artworkDialog = null
+            }
+        }
+        artworkDialog = dialog
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            attributes = attributes.apply { dimAmount = 0.8f }
+            decorView.setPadding(0, 0, 0, 0)
+            val metrics = resources.displayMetrics
+            setLayout((metrics.widthPixels * 0.92f).toInt(), (metrics.heightPixels * 0.78f).toInt())
         }
     }
 
@@ -675,6 +747,8 @@ class NowPlayingFragment : Fragment() {
         handler.removeCallbacksAndMessages(null)
         observationJob?.cancel()
         modeSnackbar?.dismiss()
+        artworkDialog?.dismiss()
+        artworkDialog = null
         observationJob = null
         observedService = null
         super.onDestroyView()

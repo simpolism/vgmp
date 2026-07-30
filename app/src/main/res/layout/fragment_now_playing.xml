@@ -22,7 +22,9 @@
                 android:layout_gravity="center_horizontal"
                 android:scaleType="fitCenter"
                 android:src="@drawable/vgmp_logo"
-                android:contentDescription="Album art; tap to open visualizer" />
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="Album art; tap to enlarge" />
 
             <!-- Track title with playlist and endless loop buttons -->
             <LinearLayout
@@ -261,53 +263,74 @@
                 android:text="Visualizer"
                 android:textColor="@color/vgmp_accent" />
 
-            <!-- Channel VU Meters -->
-            <GridLayout
-                android:id="@+id/channels_meter_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:layout_marginHorizontal="16dp"
-                android:columnCount="3"
-                android:visibility="gone" />
-
-            <!-- Chip Volumes divider -->
-            <TextView
-                android:id="@+id/tv_sound_chips_header"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:text="Volume per Sound Chip"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btn_playback_details"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="4dp"
+                android:minWidth="160dp"
+                android:text="Playback details ▾"
+                android:textColor="@color/vgmp_text_secondary"
+                android:contentDescription="Expand playback details" />
 
             <LinearLayout
-                android:id="@+id/volumes_container"
+                android:id="@+id/playback_details_container"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:layout_marginTop="8dp" />
+                android:visibility="gone">
 
-            <!-- Channels header and container -->
-            <TextView
-                android:id="@+id/tv_channels_header"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:text="Mute/solo per channel"
-                android:textColor="@color/vgmp_accent"
-                android:textSize="14sp"
-                android:textStyle="bold"
-                android:visibility="gone" />
+                <!-- Channel VU Meters -->
+                <GridLayout
+                    android:id="@+id/channels_meter_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="16dp"
+                    android:layout_marginHorizontal="16dp"
+                    android:columnCount="3"
+                    android:visibility="gone" />
 
-            <LinearLayout
-                android:id="@+id/channels_container"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:layout_marginTop="8dp" />
+                <!-- Chip Volumes divider -->
+                <TextView
+                    android:id="@+id/tv_sound_chips_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:text="Volume per Sound Chip"
+                    android:textColor="@color/vgmp_accent"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/volumes_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="8dp" />
+
+                <!-- Channels header and container -->
+                <TextView
+                    android:id="@+id/tv_channels_header"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="24dp"
+                    android:text="Mute/solo per channel"
+                    android:textColor="@color/vgmp_accent"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:id="@+id/channels_container"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:layout_marginTop="8dp" />
+
+            </LinearLayout>
 
         </LinearLayout>
 </androidx.core.widget.NestedScrollView>

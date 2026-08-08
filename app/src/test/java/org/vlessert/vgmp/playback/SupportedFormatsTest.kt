@@ -63,4 +63,17 @@ class SupportedFormatsTest {
         assertTrue(SupportedFormats.companionLibraryExtension("01 Title.MINIUSF") == "usflib")
         assertFalse(SupportedFormats.supports("game.usflib"))
     }
+
+    @Test
+    fun segaXsfFamiliesUseTheirMatchingLibraries() {
+        assertTrue(SupportedFormats.supports("music.ssf"))
+        assertTrue(SupportedFormats.supports("01 Title.MINISSF"))
+        assertTrue(SupportedFormats.companionLibraryExtension("music.ssf") == "ssflib")
+        assertTrue(SupportedFormats.companionLibraryExtension("music.minissf") == "ssflib")
+        assertTrue(SupportedFormats.supports("music.dsf"))
+        assertTrue(SupportedFormats.supports("01 Title.MINIDSF"))
+        assertTrue(SupportedFormats.companionLibraryExtension("music.dsf") == "dsflib")
+        assertFalse(SupportedFormats.supports("game.ssflib"))
+        assertFalse(SupportedFormats.supports("game.dsflib"))
+    }
 }

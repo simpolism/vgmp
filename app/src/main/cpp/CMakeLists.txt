@@ -160,8 +160,14 @@ set_target_properties(lazyusf2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(lazyusf2 PUBLIC ${LAZYUSF2_DIR})
 target_compile_options(lazyusf2 PRIVATE -Wno-return-type)
 
+# Highly Theoretical emulates the Saturn SCSP (SSF) and Dreamcast AICA (DSF).
+add_subdirectory(
+    ${CMAKE_CURRENT_SOURCE_DIR}/audiodecoder-ssf/lib/Highly_Theoretical
+    highly_theoretical_build
+)
+
 # JNI glue shared library
-add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp twosf_backend.cpp usf_backend.cpp)
+add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp twosf_backend.cpp usf_backend.cpp sega_xsf_backend.cpp)
 
 target_include_directories(vgmplayer PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
@@ -180,6 +186,7 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/psflib
     ${VIO2SF_DIR}
     ${LAZYUSF2_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/audiodecoder-ssf/lib/Highly_Theoretical/Core
 )
 
 target_link_libraries(vgmplayer
@@ -196,6 +203,7 @@ target_link_libraries(vgmplayer
     psflib_gsf
     vio2sf
     lazyusf2
+    highly_theoretical
     log
     android
     z

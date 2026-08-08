@@ -37,3 +37,6 @@
 [submodule "app/src/main/cpp/lazyusf2"]
 	path = app/src/main/cpp/lazyusf2
 	url = https://gitlab.com/kode54/lazyusf2.git
+[submodule "app/src/main/cpp/audiodecoder-ssf"]
+	path = app/src/main/cpp/audiodecoder-ssf
+	url = https://github.com/xbmc/audiodecoder.ssf.git

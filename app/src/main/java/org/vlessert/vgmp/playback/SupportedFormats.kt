@@ -3,6 +3,8 @@ package org.vlessert.vgmp.playback
 object SupportedFormats {
     val twoSfFamilyExtensions = setOf("2sf", "mini2sf")
     val usfFamilyExtensions = setOf("usf", "miniusf")
+    val ssfFamilyExtensions = setOf("ssf", "minissf")
+    val dsfFamilyExtensions = setOf("dsf", "minidsf")
     val gsfFamilyExtensions = setOf("gsf", "minigsf")
     val kssFamilyExtensions = setOf("kss", "mgs", "bgm", "opx", "mpk", "mbm")
     val multiTrackExtensions = setOf("nsf", "nsfe", "gbs", "hes", "sap", "ay") +
@@ -15,7 +17,8 @@ object SupportedFormats {
         "psm", "amf", "okt", "dsm", "dtm", "umx",
         "mid", "midi", "rmi", "smf", "mus", "lmp",
         "psf", "psf1", "psf2", "minipsf", "minipsf1", "minipsf2",
-        "gsf", "minigsf", "2sf", "mini2sf", "usf", "miniusf"
+        "gsf", "minigsf", "2sf", "mini2sf", "usf", "miniusf",
+        "ssf", "minissf", "dsf", "minidsf"
     )
 
     fun supports(displayName: String): Boolean =
@@ -28,6 +31,8 @@ object SupportedFormats {
         in gsfFamilyExtensions -> "gsflib"
         in twoSfFamilyExtensions -> "2sflib"
         in usfFamilyExtensions -> "usflib"
+        in ssfFamilyExtensions -> "ssflib"
+        in dsfFamilyExtensions -> "dsflib"
         else -> null
     }
 

@@ -29,6 +29,8 @@ VGMP is a fully offline Android player for video game music. It browses files th
 - Game Boy Advance: `.gsf`, `.minigsf`
 - Nintendo DS: `.2sf`, `.mini2sf`
 - Nintendo 64: `.usf`, `.miniusf`
+- Sega Saturn: `.ssf`, `.minissf`
+- Sega Dreamcast: `.dsf`, `.minidsf`
 
 ## Build requirements
 

@@ -516,8 +516,8 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
     private suspend fun materialize(track: TrackRef): String? {
         if (!SupportedFormats.supports(track.displayName)) return null
         val directPlayDir = File(filesDir, "direct-play").also { it.mkdirs() }
-        if (SupportedFormats.isGsfFamily(track.displayName)) {
-            return materializeGsf(track, directPlayDir)
+        SupportedFormats.companionLibraryExtension(track.displayName)?.let { libraryExtension ->
+            return materializeXsfFamily(track, directPlayDir, libraryExtension)
         }
         val safeName = track.displayName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
             .takeLast(180).ifEmpty { "track" }
@@ -543,8 +543,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         }
     }
 
-    private suspend fun materializeGsf(track: TrackRef, directPlayDir: File): String? {
-        val destinationDir = File(directPlayDir, "current-gsf")
+    private suspend fun materializeXsfFamily(
+        track: TrackRef,
+        directPlayDir: File,
+        libraryExtension: String
+    ): String? {
+        val destinationDir = File(directPlayDir, "current-${libraryExtension.removeSuffix("lib")}")
         return try {
             withContext(Dispatchers.IO) {
                 destinationDir.deleteRecursively()
@@ -557,7 +561,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val required = siblings.filter {
                         !it.directory && (
                             it.path == track.archiveEntry ||
-                                it.displayName.endsWith(".gsflib", ignoreCase = true)
+                                it.displayName.endsWith(".$libraryExtension", ignoreCase = true)
                             )
                     }
                     required.forEach { item ->
@@ -570,13 +574,15 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                     val selectedName = safeCompanionName(track.displayName)
                     File(destinationDir, selectedName).outputStream().use { output ->
                         contentResolver.openInputStream(track.uri)?.use { it.copyTo(output) }
-                            ?: throw IOException("Could not open the selected GSF document")
+                            ?: throw IOException("Could not open the selected document")
                     }
 
                     val parent = track.parentUri
-                    if (parent == null && track.displayName.endsWith(".minigsf", ignoreCase = true)) {
+                    if (parent == null && track.displayName.substringAfterLast('.', "")
+                            .startsWith("mini", ignoreCase = true)
+                    ) {
                         throw IOException(
-                            "Open miniGSF files from VGMP's folder browser so their GSFLIB can be found"
+                            "Open mini files from VGMP's folder browser so their library can be found"
                         )
                     }
                     if (parent == null) {
@@ -598,12 +604,12 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                             val mime = cursor.getString(2)
                             if (
                                 mime == DocumentsContract.Document.MIME_TYPE_DIR ||
-                                !name.endsWith(".gsflib", ignoreCase = true)
+                                !name.endsWith(".$libraryExtension", ignoreCase = true)
                             ) continue
                             val uri = DocumentsContract.buildDocumentUriUsingTree(parent, id)
                             File(destinationDir, safeCompanionName(name)).outputStream().use { output ->
                                 contentResolver.openInputStream(uri)?.use { it.copyTo(output) }
-                                    ?: throw IOException("Could not open GSF library $name")
+                                    ?: throw IOException("Could not open companion library $name")
                             }
                         }
                     }
@@ -615,7 +621,7 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
             }
         } catch (e: Exception) {
             destinationDir.deleteRecursively()
-            Log.e(TAG, "Failed to prepare GSF family ${track.displayName}", e)
+            Log.e(TAG, "Failed to prepare xSF family ${track.displayName}", e)
             Toast.makeText(
                 applicationContext,
                 e.message ?: "Could not prepare ${track.displayName}",

@@ -77,8 +77,31 @@ target_include_directories(psflib_gsf PUBLIC
 )
 target_link_libraries(psflib_gsf z)
 
+# vio2sf is a stripped DeSmuME core for 2SF/mini2SF playback.
+set(VIO2SF_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vio2sf/src/vio2sf/desmume)
+add_library(vio2sf STATIC
+    ${VIO2SF_DIR}/armcpu.c
+    ${VIO2SF_DIR}/arm_instructions.c
+    ${VIO2SF_DIR}/barray.c
+    ${VIO2SF_DIR}/bios.c
+    ${VIO2SF_DIR}/cp15.c
+    ${VIO2SF_DIR}/FIFO.c
+    ${VIO2SF_DIR}/GPU.c
+    ${VIO2SF_DIR}/isqrt.c
+    ${VIO2SF_DIR}/matrix.c
+    ${VIO2SF_DIR}/mc.c
+    ${VIO2SF_DIR}/MMU.c
+    ${VIO2SF_DIR}/NDSSystem.c
+    ${VIO2SF_DIR}/resampler.c
+    ${VIO2SF_DIR}/state.c
+    ${VIO2SF_DIR}/thumb_instructions.c
+    ${VIO2SF_DIR}/SPU.cpp
+)
+set_target_properties(vio2sf PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(vio2sf PUBLIC ${VIO2SF_DIR})
+
 # JNI glue shared library
-add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp)
+add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp twosf_backend.cpp)
 
 target_include_directories(vgmplayer PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
@@ -95,6 +118,7 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/mgba-gsf/include
     ${CMAKE_CURRENT_BINARY_DIR}/mgba_gsf_build/include
     ${CMAKE_CURRENT_SOURCE_DIR}/psflib
+    ${VIO2SF_DIR}
 )
 
 target_link_libraries(vgmplayer
@@ -109,6 +133,7 @@ target_link_libraries(vgmplayer
     psf
     mgba-gsf
     psflib_gsf
+    vio2sf
     log
     android
     z

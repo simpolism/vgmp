@@ -45,4 +45,13 @@ class SupportedFormatsTest {
         assertTrue(SupportedFormats.isGsfFamily("01 Title.MINIGSF"))
         assertFalse(SupportedFormats.supports("game.gsflib"))
     }
+
+    @Test
+    fun twoSfAndMiniTwoSfRequireTwoSfLibraries() {
+        assertTrue(SupportedFormats.supports("music.2sf"))
+        assertTrue(SupportedFormats.supports("01 Title.MINI2SF"))
+        assertTrue(SupportedFormats.companionLibraryExtension("music.2sf") == "2sflib")
+        assertTrue(SupportedFormats.companionLibraryExtension("01 Title.MINI2SF") == "2sflib")
+        assertFalse(SupportedFormats.supports("game.2sflib"))
+    }
 }

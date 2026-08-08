@@ -45,6 +45,7 @@
 #include "libpsf/driver.h"
 #include "gsf_backend.h"
 #include "twosf_backend.h"
+#include "usf_backend.h"
 #include "memio.h"
 #include "mus2mid.h"
 
@@ -64,7 +65,8 @@ enum class PlayerType {
   LIBMUSDOOM,
   LIBPSF,
   LIBGSF,
-  LIBTWOSF
+  LIBTWOSF,
+  LIBUSF
 };
 
 static PlayerType gPlayerType = PlayerType::NONE;
@@ -412,6 +414,17 @@ static bool isTwoSfFormat(const char *path) {
   return strcmp(lowerExt, "2sf") == 0 || strcmp(lowerExt, "mini2sf") == 0;
 }
 
+static bool isUsfFormat(const char *path) {
+  const char *ext = strrchr(path, '.');
+  if (!ext)
+    return false;
+  ++ext;
+  char lowerExt[9] = {0};
+  for (int i = 0; ext[i] && i < 8; ++i)
+    lowerExt[i] = static_cast<char>(tolower(ext[i]));
+  return strcmp(lowerExt, "usf") == 0 || strcmp(lowerExt, "miniusf") == 0;
+}
+
 // Check if file extension is supported by libgme
 static bool isGmeFormat(const char *path) {
   const char *ext = strrchr(path, '.');
@@ -561,6 +574,7 @@ static void cleanup() {
 
   gsf_close();
   twosf_close();
+  usf_backend_close();
 
   // Stop and join PSF generation thread if running
   if (gPsfGenerationThread.joinable()) {
@@ -719,6 +733,18 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
       return JNI_FALSE;
     }
     gPlayerType = PlayerType::LIBTWOSF;
+    return JNI_TRUE;
+  }
+
+  if (isUsfFormat(path)) {
+    LOGD("Detected USF format: %s", path);
+    const bool opened = usf_backend_open(path, static_cast<int>(gSampleRate));
+    env->ReleaseStringUTFChars(jpath, path);
+    if (!opened) {
+      LOGE("usf_backend_open failed");
+      return JNI_FALSE;
+    }
+    gPlayerType = PlayerType::LIBUSF;
     return JNI_TRUE;
   }
 
@@ -1095,6 +1121,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nIsEnded(JNIEnv *env, jclass cls) {
   }
   if (gPlayerType == PlayerType::LIBTWOSF)
     return JNI_FALSE;
+  if (gPlayerType == PlayerType::LIBUSF)
+    return JNI_FALSE;
   if (gPlayerType == PlayerType::LIBMUSDOOM && gMusDoomPlayer) {
     // libMusDoom: check if music is still playing
     // MUS files loop by default when started with looping=1
@@ -1127,6 +1155,9 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nUsesTimedFade(JNIEnv *env,
 
   if (gPlayerType == PlayerType::LIBTWOSF)
     return twosf_total_samples() > 0 ? JNI_TRUE : JNI_FALSE;
+
+  if (gPlayerType == PlayerType::LIBUSF)
+    return usf_backend_total_samples() > 0 ? JNI_TRUE : JNI_FALSE;
 
   return JNI_FALSE;
 }
@@ -1299,6 +1330,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTotalSamples(JNIEnv *env,
   }
   if (gPlayerType == PlayerType::LIBTWOSF)
     return static_cast<jlong>(twosf_total_samples());
+  if (gPlayerType == PlayerType::LIBUSF)
+    return static_cast<jlong>(usf_backend_total_samples());
   return 0;
 }
 
@@ -1338,6 +1371,8 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetCurrentSample(JNIEnv *env,
   }
   if (gPlayerType == PlayerType::LIBTWOSF)
     return static_cast<jlong>(twosf_current_sample());
+  if (gPlayerType == PlayerType::LIBUSF)
+    return static_cast<jlong>(usf_backend_current_sample());
   return 0;
 }
 
@@ -1377,6 +1412,8 @@ JNIEXPORT void JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nSeek(
   }
   if (gPlayerType == PlayerType::LIBTWOSF)
     twosf_seek(static_cast<uint64_t>(samplePos));
+  if (gPlayerType == PlayerType::LIBUSF)
+    usf_backend_seek(static_cast<uint64_t>(samplePos));
   // KSS doesn't have a direct seek function - need to reset and fast-forward
   if (gPlayerType == PlayerType::LIBKSS && gKssPlay && gKss) {
     // For KSS, we need to reset and fast-forward to the target position
@@ -1557,6 +1594,14 @@ JNIEXPORT jint JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nFillBuffer(
     }
   } else if (gPlayerType == PlayerType::LIBTWOSF) {
     written = twosf_render(dst, frames);
+    for (jint i = 0; i < written; ++i) {
+      const float sample =
+          (static_cast<float>(dst[i * 2]) + static_cast<float>(dst[i * 2 + 1])) /
+          65536.0f;
+      pushFftSample(sample);
+    }
+  } else if (gPlayerType == PlayerType::LIBUSF) {
+    written = usf_backend_render(dst, frames);
     for (jint i = 0; i < written; ++i) {
       const float sample =
           (static_cast<float>(dst[i * 2]) + static_cast<float>(dst[i * 2 + 1])) /
@@ -2217,6 +2262,26 @@ Java_org_vlessert_vgmp_engine_VgmEngine_nGetTags(JNIEnv *env, jclass cls) {
     s += "|||TITLE-JPN||||||GAME|||";
     s += tags.game;
     s += "|||GAME-JPN||||||SYSTEM|||Nintendo DS";
+    s += "|||SYSTEM-JPN||||||ARTIST|||";
+    s += tags.artist;
+    s += "|||ARTIST-JPN||||||DATE|||";
+    s += tags.year;
+    s += "|||ENCODED_BY|||";
+    s += tags.ripper;
+    s += "|||COMMENT|||";
+    s += tags.comment;
+    s += "|||";
+    return newDecodedString(env, s, "UTF-8");
+  }
+
+  if (gPlayerType == PlayerType::LIBUSF) {
+    const UsfTags &tags = usf_backend_tags();
+    std::string s;
+    s += "TITLE|||";
+    s += tags.title;
+    s += "|||TITLE-JPN||||||GAME|||";
+    s += tags.game;
+    s += "|||GAME-JPN||||||SYSTEM|||Nintendo 64";
     s += "|||SYSTEM-JPN||||||ARTIST|||";
     s += tags.artist;
     s += "|||ARTIST-JPN||||||DATE|||";

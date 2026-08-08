@@ -100,8 +100,68 @@ add_library(vio2sf STATIC
 set_target_properties(vio2sf PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(vio2sf PUBLIC ${VIO2SF_DIR})
 
+# LazyUSF2 provides Nintendo 64 USF/miniUSF emulation. Android uses its
+# portable cached interpreter; audio is resampled by the core to VGMP's rate.
+set(LAZYUSF2_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lazyusf2)
+add_library(lazyusf2 STATIC
+    ${LAZYUSF2_DIR}/ai/ai_controller.c
+    ${LAZYUSF2_DIR}/api/callbacks.c
+    ${LAZYUSF2_DIR}/debugger/dbg_decoder.c
+    ${LAZYUSF2_DIR}/main/main.c
+    ${LAZYUSF2_DIR}/main/rom.c
+    ${LAZYUSF2_DIR}/main/savestates.c
+    ${LAZYUSF2_DIR}/main/util.c
+    ${LAZYUSF2_DIR}/memory/memory.c
+    ${LAZYUSF2_DIR}/pi/cart_rom.c
+    ${LAZYUSF2_DIR}/pi/pi_controller.c
+    ${LAZYUSF2_DIR}/r4300/cached_interp.c
+    ${LAZYUSF2_DIR}/r4300/cp0.c
+    ${LAZYUSF2_DIR}/r4300/cp1.c
+    ${LAZYUSF2_DIR}/r4300/exception.c
+    ${LAZYUSF2_DIR}/r4300/interupt.c
+    ${LAZYUSF2_DIR}/r4300/mi_controller.c
+    ${LAZYUSF2_DIR}/r4300/pure_interp.c
+    ${LAZYUSF2_DIR}/r4300/r4300.c
+    ${LAZYUSF2_DIR}/r4300/r4300_core.c
+    ${LAZYUSF2_DIR}/r4300/recomp.c
+    ${LAZYUSF2_DIR}/r4300/reset.c
+    ${LAZYUSF2_DIR}/r4300/tlb.c
+    ${LAZYUSF2_DIR}/rdp/rdp_core.c
+    ${LAZYUSF2_DIR}/ri/rdram.c
+    ${LAZYUSF2_DIR}/ri/rdram_detection_hack.c
+    ${LAZYUSF2_DIR}/ri/ri_controller.c
+    ${LAZYUSF2_DIR}/rsp/rsp_core.c
+    ${LAZYUSF2_DIR}/rsp_hle/alist.c
+    ${LAZYUSF2_DIR}/rsp_hle/alist_audio.c
+    ${LAZYUSF2_DIR}/rsp_hle/alist_naudio.c
+    ${LAZYUSF2_DIR}/rsp_hle/alist_nead.c
+    ${LAZYUSF2_DIR}/rsp_hle/audio.c
+    ${LAZYUSF2_DIR}/rsp_hle/cicx105.c
+    ${LAZYUSF2_DIR}/rsp_hle/hle.c
+    ${LAZYUSF2_DIR}/rsp_hle/hvqm.c
+    ${LAZYUSF2_DIR}/rsp_hle/jpeg.c
+    ${LAZYUSF2_DIR}/rsp_hle/memory.c
+    ${LAZYUSF2_DIR}/rsp_hle/mp3.c
+    ${LAZYUSF2_DIR}/rsp_hle/musyx.c
+    ${LAZYUSF2_DIR}/rsp_hle/plugin.c
+    ${LAZYUSF2_DIR}/rsp_hle/re2.c
+    ${LAZYUSF2_DIR}/rsp_lle/rsp.c
+    ${LAZYUSF2_DIR}/si/cic.c
+    ${LAZYUSF2_DIR}/si/game_controller.c
+    ${LAZYUSF2_DIR}/si/n64_cic_nus_6105.c
+    ${LAZYUSF2_DIR}/si/pif.c
+    ${LAZYUSF2_DIR}/si/si_controller.c
+    ${LAZYUSF2_DIR}/usf/usf.c
+    ${LAZYUSF2_DIR}/usf/barray.c
+    ${LAZYUSF2_DIR}/usf/resampler.c
+    ${LAZYUSF2_DIR}/vi/vi_controller.c
+)
+set_target_properties(lazyusf2 PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(lazyusf2 PUBLIC ${LAZYUSF2_DIR})
+target_compile_options(lazyusf2 PRIVATE -Wno-return-type)
+
 # JNI glue shared library
-add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp twosf_backend.cpp)
+add_library(vgmplayer SHARED vgmplayer_jni.cpp gsf_backend.cpp twosf_backend.cpp usf_backend.cpp)
 
 target_include_directories(vgmplayer PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/libvgm
@@ -119,6 +179,7 @@ target_include_directories(vgmplayer PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/mgba_gsf_build/include
     ${CMAKE_CURRENT_SOURCE_DIR}/psflib
     ${VIO2SF_DIR}
+    ${LAZYUSF2_DIR}
 )
 
 target_link_libraries(vgmplayer
@@ -134,6 +195,7 @@ target_link_libraries(vgmplayer
     mgba-gsf
     psflib_gsf
     vio2sf
+    lazyusf2
     log
     android
     z

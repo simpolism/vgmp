@@ -34,3 +34,6 @@
 [submodule "app/src/main/cpp/vio2sf"]
 	path = app/src/main/cpp/vio2sf
 	url = https://gitlab.com/kode54/vio2sf.git
+[submodule "app/src/main/cpp/lazyusf2"]
+	path = app/src/main/cpp/lazyusf2
+	url = https://gitlab.com/kode54/lazyusf2.git

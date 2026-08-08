@@ -54,4 +54,13 @@ class SupportedFormatsTest {
         assertTrue(SupportedFormats.companionLibraryExtension("01 Title.MINI2SF") == "2sflib")
         assertFalse(SupportedFormats.supports("game.2sflib"))
     }
+
+    @Test
+    fun usfAndMiniUsfRequireUsfLibraries() {
+        assertTrue(SupportedFormats.supports("music.usf"))
+        assertTrue(SupportedFormats.supports("01 Title.MINIUSF"))
+        assertTrue(SupportedFormats.companionLibraryExtension("music.usf") == "usflib")
+        assertTrue(SupportedFormats.companionLibraryExtension("01 Title.MINIUSF") == "usflib")
+        assertFalse(SupportedFormats.supports("game.usflib"))
+    }
 }

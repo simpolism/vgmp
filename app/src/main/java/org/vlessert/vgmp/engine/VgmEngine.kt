@@ -76,6 +76,8 @@ object VgmEngine {
     // VGM timing: 0 = header/auto, otherwise 50 or 60 Hz
     @JvmStatic external fun nSetVgmPlaybackHz(hz: Int)
     @JvmStatic external fun nGetVgmPlaybackHz(): Int
+    @JvmStatic external fun nSetPreserveYM2612DacRate(enabled: Boolean)
+    @JvmStatic external fun nGetPreserveYM2612DacRate(): Boolean
 
     // KSS direct track info (without opening as active track)
     @JvmStatic external fun nGetKssTrackCountDirect(path: String): Int
@@ -140,6 +142,10 @@ object VgmEngine {
     
     suspend fun setVgmPlaybackHz(hz: Int) = mutex.withLock { nSetVgmPlaybackHz(hz) }
     suspend fun getVgmPlaybackHz(): Int = mutex.withLock { nGetVgmPlaybackHz() }
+    suspend fun setPreserveYM2612DacRate(enabled: Boolean) =
+        mutex.withLock { nSetPreserveYM2612DacRate(enabled) }
+    suspend fun getPreserveYM2612DacRate(): Boolean =
+        mutex.withLock { nGetPreserveYM2612DacRate() }
     
     // KSS direct track info
     suspend fun getKssTrackCountDirect(path: String): Int = mutex.withLock { nGetKssTrackCountDirect(path) }

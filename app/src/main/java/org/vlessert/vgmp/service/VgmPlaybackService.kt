@@ -695,6 +695,9 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
         restorePaused: Boolean = false
     ) {
         VgmEngine.setVgmPlaybackHz(SettingsManager.getVgmPlaybackHz(applicationContext))
+        VgmEngine.setPreserveYM2612DacRate(
+            SettingsManager.preserveYM2612DacRate(applicationContext)
+        )
         VgmEngine.setLoopRepeatCount(SettingsManager.getLoopRepeats(applicationContext))
         val opened = VgmEngine.open(path)
         if (!opened) {
@@ -1443,6 +1446,11 @@ class VgmPlaybackService : MediaBrowserServiceCompat() {
                 refreshTimelineFromEngine()
             }
         }
+    }
+
+    fun setPreserveYM2612DacRate(enabled: Boolean) {
+        SettingsManager.setPreserveYM2612DacRate(applicationContext, enabled)
+        serviceScope.launch { VgmEngine.setPreserveYM2612DacRate(enabled) }
     }
 
     /** Cycle the persistent libvgm timing override: header/auto → 60 Hz → 50 Hz. */

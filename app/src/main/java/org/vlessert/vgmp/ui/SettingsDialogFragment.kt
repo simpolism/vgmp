@@ -44,6 +44,8 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         binding.switchReverbEnabled.isChecked = SettingsManager.isReverbEnabled(context)
         binding.switchOpenPlayerOnSelection.isChecked = SettingsManager.openPlayerOnSelection(context)
         binding.switchZipBrowsing.isChecked = SettingsManager.isZipBrowsingEnabled(context)
+        binding.switchPreserveYm2612DacRate.isChecked =
+            SettingsManager.preserveYM2612DacRate(context)
         updateCacheSize()
         val loopRepeats = SettingsManager.getLoopRepeats(context)
         binding.seekbarLoopRepeats.progress = loopRepeats
@@ -93,6 +95,11 @@ class SettingsDialogFragment : InsetAwareDialogFragment() {
         }
         binding.switchZipBrowsing.setOnCheckedChangeListener { _, enabled ->
             SettingsManager.setZipBrowsingEnabled(context, enabled)
+        }
+        binding.switchPreserveYm2612DacRate.setOnCheckedChangeListener { _, enabled ->
+            (activity as? org.vlessert.vgmp.MainActivity)?.getService()
+                ?.setPreserveYM2612DacRate(enabled)
+                ?: SettingsManager.setPreserveYM2612DacRate(context, enabled)
         }
         binding.btnClearArchiveCache.setOnClickListener {
             lifecycleScope.launch {

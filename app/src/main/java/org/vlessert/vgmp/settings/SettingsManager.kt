@@ -14,6 +14,7 @@ object SettingsManager {
     private const val KEY_BASS_ENABLED = "bass_enabled"
     private const val KEY_REVERB_ENABLED = "reverb_enabled"
     private const val KEY_VGM_PLAYBACK_HZ = "vgm_playback_hz"
+    private const val KEY_PRESERVE_YM2612_DAC_RATE = "preserve_ym2612_dac_rate"
     private const val KEY_LOOP_REPEATS = "embedded_loop_repeats"
     private const val KEY_FADE_OUT_SECONDS = "fade_out_seconds"
     private const val KEY_CHIP_VOLUME_PREFIX = "chip_volume_"
@@ -78,6 +79,12 @@ object SettingsManager {
 
     fun setVgmPlaybackHz(context: Context, hz: Int) =
         getPrefs(context).edit().putInt(KEY_VGM_PLAYBACK_HZ, normalizeVgmPlaybackHz(hz)).apply()
+
+    fun preserveYM2612DacRate(context: Context): Boolean =
+        getPrefs(context).getBoolean(KEY_PRESERVE_YM2612_DAC_RATE, true)
+
+    fun setPreserveYM2612DacRate(context: Context, enabled: Boolean) =
+        getPrefs(context).edit().putBoolean(KEY_PRESERVE_YM2612_DAC_RATE, enabled).apply()
 
     fun getLoopRepeats(context: Context): Int =
         normalizeLoopRepeats(getPrefs(context).getInt(KEY_LOOP_REPEATS, 0))

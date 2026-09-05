@@ -94,6 +94,8 @@ static char *gChipBuf = nullptr;
 static UINT32 gSampleRate = 44100;
 // 0 honors the VGM header; 50/60 override its recorded refresh rate.
 static UINT32 gVgmPlaybackHz = 0;
+// Preserve the YM2612 DAC byte clock when a 60 Hz VGM is slowed to 50 Hz.
+static bool gPreserveYM2612DacRate = true;
 static std::string gRomPath = "";
 
 // PSF playback state - asynchronous generation and streaming with improved
@@ -1045,6 +1047,7 @@ JNIEXPORT jboolean JNICALL Java_org_vlessert_vgmp_engine_VgmEngine_nOpen(
   VGM_PLAY_OPTIONS opts;
   memset(&opts, 0, sizeof(opts));
   opts.playbackHz = gVgmPlaybackHz;
+  opts.preserveYM2612DacRate = gPreserveYM2612DacRate ? 1 : 0;
   gVgmPlayer->SetPlayerOptions(opts);
 
   if (gVgmPlayer->LoadFile(gLoader)) {
@@ -1283,6 +1286,24 @@ JNIEXPORT jint JNICALL
 Java_org_vlessert_vgmp_engine_VgmEngine_nGetVgmPlaybackHz(JNIEnv *env,
                                                           jclass cls) {
   return (jint)gVgmPlaybackHz;
+}
+
+JNIEXPORT void JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nSetPreserveYM2612DacRate(
+    JNIEnv *env, jclass cls, jboolean enabled) {
+  gPreserveYM2612DacRate = enabled == JNI_TRUE;
+  if (gPlayerType == PlayerType::LIBVGM && gVgmPlayer) {
+    VGM_PLAY_OPTIONS opts;
+    gVgmPlayer->GetPlayerOptions(opts);
+    opts.preserveYM2612DacRate = gPreserveYM2612DacRate ? 1 : 0;
+    gVgmPlayer->SetPlayerOptions(opts);
+  }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_org_vlessert_vgmp_engine_VgmEngine_nGetPreserveYM2612DacRate(
+    JNIEnv *env, jclass cls) {
+  return gPreserveYM2612DacRate ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlong JNICALL

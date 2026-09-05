@@ -246,6 +246,20 @@
                 android:textColor="@color/vgmp_text_secondary"
                 android:textSize="12sp" />
             <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/switch_preserve_ym2612_dac_rate"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingVertical="10dp"
+                android:text="Hardware-rate Genesis DAC"
+                android:textColor="@color/vgmp_text_primary" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:text="Keep PCM drums at their native pitch when slowing a 60 Hz VGM to 50 Hz. Disable for legacy whole-stream stretching."
+                android:textColor="@color/vgmp_text_secondary"
+                android:textSize="12sp" />
+            <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/switch_bass_enabled"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
